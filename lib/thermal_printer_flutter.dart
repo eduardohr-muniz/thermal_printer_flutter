@@ -1,9 +1,11 @@
 import 'package:flutter/cupertino.dart';
 import 'package:thermal_printer_flutter/src/enums/printer_type.dart';
 import 'package:thermal_printer_flutter/src/models/printer.dart';
+import 'package:thermal_printer_flutter/src/models/printer_status.dart';
 import 'package:thermal_printer_flutter/src/services/screent_shot.dart';
 import 'thermal_printer_flutter_platform_interface.dart';
 export './src/models/printer.dart';
+export './src/models/printer_status.dart';
 export './src/enums/printer_type.dart';
 export './src/services/screent_shot.dart';
 import 'package:image/image.dart' as img;
@@ -53,6 +55,11 @@ class ThermalPrinterFlutter implements ThermalPrinterFlutterPlatform {
   @override
   Future<bool> isConnected({required Printer printer}) async {
     return await ThermalPrinterFlutterPlatform.instance.isConnected(printer: printer);
+  }
+
+  @override
+  Future<PrinterStatus> getPrinterStatus({required Printer printer}) async {
+    return await ThermalPrinterFlutterPlatform.instance.getPrinterStatus(printer: printer);
   }
 
   Future<img.Image> screenShotWidget(

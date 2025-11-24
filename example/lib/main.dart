@@ -32,6 +32,7 @@ class _MyAppState extends State<MyApp> {
   final _messengerKey = GlobalKey<ScaffoldMessengerState>();
   bool _isDiscovering = false;
   String _discoveryProgress = '';
+  bool _isCheckingStatus = false;
 
   @override
   void initState() {
@@ -156,7 +157,9 @@ class _MyAppState extends State<MyApp> {
       final connected = await _thermalPrinterFlutterPlugin.connect(printer: printer);
 
       setState(() {
-        final index = _printers.indexWhere((p) => (p.type == PrinterType.bluethoot && p.bleAddress == printer.bleAddress) || (p.type == PrinterType.network && p.ip == printer.ip && p.port == printer.port));
+        final index = _printers.indexWhere((p) =>
+            (p.type == PrinterType.bluethoot && p.bleAddress == printer.bleAddress) ||
+            (p.type == PrinterType.network && p.ip == printer.ip && p.port == printer.port));
         if (index != -1) {
           _printers[index] = printer.copyWith(isConnected: connected);
           _selectedPrinter = _printers[index];
@@ -172,12 +175,16 @@ class _MyAppState extends State<MyApp> {
           _showBanner('Conectado com sucesso à impressora Bluetooth!');
         }
       } else {
-        final errorMsg = printer.type == PrinterType.network ? 'Falha ao conectar à impressora de rede ${printer.ip}:${printer.port}. Verifique se a impressora está ligada e acessível na rede.' : 'Falha ao conectar à impressora Bluetooth';
+        final errorMsg = printer.type == PrinterType.network
+            ? 'Falha ao conectar à impressora de rede ${printer.ip}:${printer.port}. Verifique se a impressora está ligada e acessível na rede.'
+            : 'Falha ao conectar à impressora Bluetooth';
         print(errorMsg);
         _showBanner(errorMsg, isError: true);
       }
     } catch (e) {
-      final errorMsg = printer.type == PrinterType.network ? 'Erro ao conectar à impressora de rede ${printer.ip}:${printer.port}: $e' : 'Erro ao conectar à impressora Bluetooth: $e';
+      final errorMsg = printer.type == PrinterType.network
+          ? 'Erro ao conectar à impressora de rede ${printer.ip}:${printer.port}: $e'
+          : 'Erro ao conectar à impressora Bluetooth: $e';
       print(errorMsg);
       setState(() {
         _connectionError = errorMsg;
@@ -354,48 +361,106 @@ class _MyAppState extends State<MyApp> {
     });
 
     try {
-      print('Iniciando descoberta automática de impressoras na rede...');
+      print('Descoberta automática não está implementada nesta versão.');
+      await Future.delayed(const Duration(milliseconds: 300));
+      _showBanner('Descoberta automática ainda não disponível neste build', isError: true);
+    } finally {
+      if (!mounted) return;
+      setState(() {
+        _isDiscovering = false;
+        _discoveryProgress = '';
+      });
+    }
+  }
 
-      final discoveredPrinters = await _thermalPrinterFlutterPlugin.discoverNetworkPrinters(
-        onProgress: (progress) {
-          setState(() {
-            _discoveryProgress = progress;
-          });
-          print('Progress: $progress');
+  Future<void> _fetchPrinterStatus() async {
+    if (_selectedPrinter == null) {
+      _showBanner('Selecione uma impressora primeiro', isError: true);
+      return;
+    }
+
+    if (_selectedPrinter!.type != PrinterType.usb) {
+      _showBanner('Leitura de status disponível apenas para impressoras USB no Windows', isError: true);
+      return;
+    }
+
+    setState(() {
+      _isCheckingStatus = true;
+    });
+
+    try {
+      final status = await _thermalPrinterFlutterPlugin.getPrinterStatus(printer: _selectedPrinter!);
+      if (!mounted) return;
+
+      await showDialog<void>(
+        context: context,
+        builder: (context) {
+          return AlertDialog(
+            title: Text('Status da impressora\n${_selectedPrinter!.name}', textAlign: TextAlign.center),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildStatusRow('Possui status', status.hasStatus),
+                _buildStatusRow('Erro', status.hasError),
+                _buildStatusRow('Sem papel', status.isPaperOut),
+                _buildStatusRow('Papel travado', status.isPaperJam),
+                _buildStatusRow('Tampa aberta', status.isDoorOpen),
+                _buildStatusRow('Offline', status.isOffline),
+                _buildStatusRow('Pouco papel', status.isPaperLow),
+                _buildStatusRow('Intervenção necessária', status.needsUserAction),
+                const SizedBox(height: 12),
+                Text(
+                  status.description.isEmpty ? 'Sem detalhes adicionais.' : status.description,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Código bruto: ${status.rawStatus}',
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Fechar'),
+              ),
+            ],
+          );
         },
       );
-
-      setState(() {
-        // Remove impressoras de rede existentes para evitar duplicatas
-        _printers.removeWhere((printer) => printer.type == PrinterType.network);
-
-        // Adiciona as impressoras descobertas
-        _printers.addAll(discoveredPrinters);
-
-        if (discoveredPrinters.isNotEmpty && _selectedPrinter == null) {
-          _selectedPrinter = discoveredPrinters.first;
-        }
-
-        _isDiscovering = false;
-        _discoveryProgress = '';
-      });
-
-      if (discoveredPrinters.isEmpty) {
-        _showBanner('Nenhuma impressora encontrada na rede. Verifique se as impressoras estão ligadas e conectadas à mesma rede.');
-      } else {
-        _showBanner('Encontradas ${discoveredPrinters.length} impressoras na rede!');
-      }
-
-      print('Descoberta concluída. Encontradas ${discoveredPrinters.length} impressoras');
     } catch (e) {
-      print('Erro durante descoberta: $e');
-      setState(() {
-        _connectionError = 'Erro durante descoberta: $e';
-        _isDiscovering = false;
-        _discoveryProgress = '';
-      });
-      _showBanner('Erro durante descoberta: $e', isError: true);
+      if (!mounted) return;
+      _showBanner('Erro ao consultar status: $e', isError: true);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCheckingStatus = false;
+        });
+      }
     }
+  }
+
+  Widget _buildStatusRow(String label, bool value) {
+    final color = value ? Colors.red.shade600 : Colors.green.shade600;
+    final text = value ? 'Sim' : 'Não';
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          Expanded(child: Text(label)),
+          Chip(
+            label: Text(
+              text,
+              style: const TextStyle(color: Colors.white),
+            ),
+            backgroundColor: color,
+            visualDensity: VisualDensity.compact,
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -532,14 +597,15 @@ class _MyAppState extends State<MyApp> {
                       ],
                     )
                   else
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
+                    Wrap(
+                      alignment: WrapAlignment.center,
+                      spacing: 10,
+                      runSpacing: 10,
                       children: [
                         ElevatedButton(
                           onPressed: _selectedPrinter?.isConnected == true ? _printTest : null,
                           child: const Text('Print Test'),
                         ),
-                        const SizedBox(width: 10),
                         ElevatedButton(
                           onPressed: _selectedPrinter?.isConnected == true
                               ? () async {
@@ -559,6 +625,19 @@ class _MyAppState extends State<MyApp> {
                                 }
                               : null,
                           child: const Text('Desconectar'),
+                        ),
+                        ElevatedButton.icon(
+                          onPressed: (_selectedPrinter != null && _selectedPrinter!.type == PrinterType.usb && !_isCheckingStatus)
+                              ? _fetchPrinterStatus
+                              : null,
+                          icon: _isCheckingStatus
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Icon(Icons.info_outline),
+                          label: const Text('Status (USB)'),
                         ),
                       ],
                     ),

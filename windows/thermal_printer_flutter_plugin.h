@@ -3,6 +3,7 @@
 
 #include <flutter/method_channel.h>
 #include <flutter/plugin_registrar_windows.h>
+#include <flutter/encodable_value.h>
 
 #include <memory>
 #include <string>
@@ -30,6 +31,8 @@ class ThermalPrinterFlutterPlugin : public flutter::Plugin {
  private:
   std::vector<std::string> GetPrinters();
   void PrintBytes(const std::vector<uint8_t>& bytes, const std::string& printerName);
+  flutter::EncodableMap BuildPrinterStatusMap(const std::string& printerName);
+  void PopulateDefaultStatus(flutter::EncodableMap& statusMap) const;
 };
 
 }  // namespace thermal_printer_flutter
