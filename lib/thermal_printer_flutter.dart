@@ -2,6 +2,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:thermal_printer_flutter/src/enums/printer_type.dart';
 import 'package:thermal_printer_flutter/src/models/printer.dart';
 import 'package:thermal_printer_flutter/src/services/screent_shot.dart';
+import 'package:thermal_printer_flutter/src/repositories/network_printer_repository.dart';
 import 'thermal_printer_flutter_platform_interface.dart';
 export './src/models/printer.dart';
 export './src/enums/printer_type.dart';
@@ -10,6 +11,7 @@ import 'package:image/image.dart' as img;
 export 'package:esc_pos_utils_plus/esc_pos_utils_plus.dart';
 
 class ThermalPrinterFlutter implements ThermalPrinterFlutterPlatform {
+  final NetworkPrinterRepository _networkRepository = NetworkPrinterRepository();
   @override
   Future<String?> getPlatformVersion() async {
     return await ThermalPrinterFlutterPlatform.instance.getPlatformVersion();
@@ -33,6 +35,22 @@ class ThermalPrinterFlutter implements ThermalPrinterFlutterPlatform {
   @override
   Future<List<Printer>> getPrinters({required PrinterType printerType}) async {
     return await ThermalPrinterFlutterPlatform.instance.getPrinters(printerType: printerType);
+  }
+
+  /// Descobre automaticamente impressoras de rede na rede local
+  ///
+  /// Escaneia a rede local procurando por impressoras nas portas comuns:
+  /// - 9100 (Raw TCP/IP - mais comum para impressoras térmicas)
+  /// - 515 (LPR/LPD)
+  /// - 631 (IPP - Internet Printing Protocol)
+  ///
+  /// [onProgress] - Callback opcional para receber atualizações do progresso
+  ///
+  /// Retorna uma lista de impressoras encontradas na rede
+  Future<List<Printer>> discoverNetworkPrinters({
+    Function(String)? onProgress,
+  }) async {
+    return await _networkRepository.discoverNetworkPrinters(onProgress: onProgress);
   }
 
   @override
@@ -67,13 +85,6 @@ class ThermalPrinterFlutter implements ThermalPrinterFlutterPlatform {
     double textScaleFactor = 1.3,
   }) async {
     return await ThermalScreenshot.captureWidgetAsMonochromeImage(context,
-        widget: widget,
-        flipHorizontal: flipHorizontal,
-        pixelRatio: pixelRatio,
-        threshold: threshold,
-        width: width,
-        applyTextScaling: applyTextScaling,
-        useBetterText: useBetterText,
-        textScaleFactor: textScaleFactor);
+        widget: widget, flipHorizontal: flipHorizontal, pixelRatio: pixelRatio, threshold: threshold, width: width, applyTextScaling: applyTextScaling, useBetterText: useBetterText, textScaleFactor: textScaleFactor);
   }
 }
