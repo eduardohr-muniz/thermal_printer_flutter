@@ -24,6 +24,9 @@ A new Flutter plugin project.
 
   s.dependency 'FlutterMacOS'
 
+  # USB printing on macOS is routed through the system print queue (CUPS).
+  s.libraries = 'cups'
+
   s.platform = :osx, '10.11'
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
   s.swift_version = '5.0'

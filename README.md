@@ -8,7 +8,7 @@ Flutter plugin for thermal printing with support for multiple platforms and conn
 | -------- | --- | --------- | ------- |
 | Android  | ❌  | ✅        | ✅      |
 | iOS      | ❌  | ✅        | ✅      |
-| macOS    | ❌  | ✅        | ✅      |
+| macOS    | ✅  | ✅        | ✅      |
 | Windows  | ✅  | ❌        | ✅      |
 | Linux    | ❌  | ❌        | ✅      |
 | Web      | ❌  | ❌        | 🚧      |
@@ -77,16 +77,32 @@ Flutter plugin for thermal printing with support for multiple platforms and conn
 2. Add the following keys to the `macos/Runner/DebugProfile.entitlements` file:
 
 ```xml
+<!-- Bluetooth printers -->
 <key>com.apple.security.device.bluetooth</key>
+<true/>
+<!-- USB printers (printing goes through the system print queue / CUPS) -->
+<key>com.apple.security.print</key>
 <true/>
 ```
 
 3. Add the following keys to the `macos/Runner/Release.entitlements` file:
 
 ```xml
+<!-- Bluetooth printers -->
 <key>com.apple.security.device.bluetooth</key>
 <true/>
+<!-- USB printers (printing goes through the system print queue / CUPS) -->
+<key>com.apple.security.print</key>
+<true/>
 ```
+
+> **USB printing on macOS:** Unlike Windows (which talks to the USB device
+> directly), macOS routes USB printing through the system print queue (CUPS).
+> The printer must first be added in **System Settings > Printers & Scanners**
+> (connect it over USB, then add it — choosing the *Generic* driver works well
+> for most ESC/POS thermal printers). `getPrinters(printerType: PrinterType.usb)`
+> then lists the installed queues, and printing sends the raw ESC/POS bytes
+> straight to the selected queue.
 
 ### Windows
 
@@ -130,7 +146,8 @@ Printer? _selectedPrinter;
 // Bluetooth printers (Android, iOS, macOS)
 final bluetoothPrinters = await thermalPrinter.getPrinters(printerType: PrinterType.bluethoot);
 
-// USB printers (Windows)
+// USB printers (Windows, macOS)
+// On macOS the printer must be added in System Settings > Printers & Scanners.
 final usbPrinters = await thermalPrinter.getPrinters(printerType: PrinterType.usb);
 
 // Network printers - Manual addition only

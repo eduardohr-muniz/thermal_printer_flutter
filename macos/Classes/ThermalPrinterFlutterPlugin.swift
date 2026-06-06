@@ -1,8 +1,6 @@
 import FlutterMacOS
 import AppKit
 import CoreBluetooth
-import IOKit
-import IOKit.usb
 
 public class ThermalPrinterFlutterPlugin: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate, FlutterPlugin {
     var centralManager: CBCentralManager?
@@ -77,8 +75,7 @@ public class ThermalPrinterFlutterPlugin: NSObject, CBCentralManagerDelegate, CB
                         result(printers)
                     }
                 case "usb":
-                    let usbPrinters = self.getUSBPrinters()
-                    result(usbPrinters)
+                    result(CupsPrinter.listPrinters())
                 default:
                     result([])
                 }
@@ -104,8 +101,7 @@ public class ThermalPrinterFlutterPlugin: NSObject, CBCentralManagerDelegate, CB
             }
             
         case "usbprinters":
-            let usbPrinters = self.getUSBPrinters()
-            result(usbPrinters)
+            result(CupsPrinter.listPrinters())
             
         case "connect":
             guard let bleAddress = call.arguments as? String,
@@ -157,6 +153,27 @@ public class ThermalPrinterFlutterPlugin: NSObject, CBCentralManagerDelegate, CB
             }
             
         case "writebytes":
+            // USB path: Dart sends a map { bytes, printerName } and we print
+            // through the system print queue (CUPS). See CupsPrinter.
+            if let args = call.arguments as? [String: Any],
+               let printerName = args["printerName"] as? String {
+                let data = ThermalPrinterFlutterPlugin.dataFromBytesArgument(args["bytes"])
+                if data.isEmpty {
+                    print("No bytes to print for USB printer \(printerName)")
+                    result(false)
+                    return
+                }
+                do {
+                    try CupsPrinter.printRawData(data, toPrinter: printerName)
+                    result(true)
+                } catch let error {
+                    print("USB/CUPS print failed: \(error.localizedDescription)")
+                    result(false)
+                }
+                return
+            }
+
+            // Bluetooth (BLE) path: arguments is a raw byte list.
             guard let arguments = call.arguments as? [UInt8],
                   let characteristic = targetCharacteristic else {
                 print("Invalid arguments for writebytes or no characteristic available")
@@ -217,70 +234,25 @@ public class ThermalPrinterFlutterPlugin: NSObject, CBCentralManagerDelegate, CB
         }
     }
     
-    // MARK: - USB Printer Methods
-    
-    private func getUSBPrinters() -> [[String: Any]] {
-        var printers: [[String: Any]] = []
-        
-        var masterPort: mach_port_t = 0
-        let status = IOMasterPort(bootstrap_port, &masterPort)
-        
-        guard status == KERN_SUCCESS else {
-            print("Failed to create master port")
-            return printers
+    // MARK: - USB Printer Helpers
+
+    /// Decodes the `bytes` argument received over the method channel into `Data`.
+    ///
+    /// Dart may send the payload as a `Uint8List` (FlutterStandardTypedData) or as
+    /// a plain `List<int>` (decoded as an array of NSNumber/Int), so handle both.
+    private static func dataFromBytesArgument(_ argument: Any?) -> Data {
+        if let typed = argument as? FlutterStandardTypedData {
+            return typed.data
         }
-        
-        let matchingDict = IOServiceMatching(kIOUSBDeviceClassName)
-        
-        var iterator: io_iterator_t = 0
-        let result = IOServiceGetMatchingServices(masterPort, matchingDict, &iterator)
-        
-        if result == kIOReturnSuccess {
-            var device = IOIteratorNext(iterator)
-            while device != 0 {
-                if let printer = getPrinterInfo(from: device) {
-                    printers.append(printer)
-                }
-                IOObjectRelease(device)
-                device = IOIteratorNext(iterator)
-            }
-            IOObjectRelease(iterator)
+        if let numbers = argument as? [NSNumber] {
+            return Data(numbers.map { $0.uint8Value })
         }
-        
-        return printers
+        if let ints = argument as? [Int] {
+            return Data(ints.map { UInt8(truncatingIfNeeded: $0) })
+        }
+        return Data()
     }
-    
-    private func getPrinterInfo(from device: io_object_t) -> [String: Any]? {
-        var printerInfo: [String: Any] = [:]
-        
-        // Get device name
-        if let name = getDeviceProperty(device, key: "USB Product Name") as? String {
-            printerInfo["name"] = name
-        } else {
-            printerInfo["name"] = "Unknown USB Printer"
-        }
-        
-        // Get device address
-        if let address = getDeviceProperty(device, key: "USB Address") as? Int {
-            printerInfo["usbAddress"] = String(address)
-        }
-        
-        // Add type
-        printerInfo["type"] = "usb"
-        printerInfo["isConnected"] = true
-        
-        return printerInfo
-    }
-    
-    private func getDeviceProperty(_ device: io_object_t, key: String) -> Any? {
-        var value: Any?
-        let keyRef = IORegistryEntryCreateCFProperty(device, key as CFString, kCFAllocatorDefault, 0)
-        if let keyRef = keyRef {
-            value = keyRef.takeUnretainedValue()
-        }
-        return value
-    }
-    
+
     // MARK: - CBCentralManagerDelegate
     
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {

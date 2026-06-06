@@ -536,7 +536,7 @@ class _MyAppState extends State<MyApp> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         ElevatedButton(
-                          onPressed: _selectedPrinter?.isConnected == true ? _printTest : null,
+                          onPressed: (_selectedPrinter?.isConnected == true || _selectedPrinter?.type == PrinterType.usb) ? _printTest : null,
                           child: const Text('Print Test'),
                         ),
                         const SizedBox(width: 10),
