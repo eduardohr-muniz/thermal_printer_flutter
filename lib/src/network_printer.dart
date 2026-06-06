@@ -2,18 +2,46 @@ import 'dart:io';
 import 'dart:async';
 import 'dart:developer';
 
+/// Abre uma conexão de socket TCP com [host]:[port].
+///
+/// Seam de testabilidade: permite injetar uma implementação fake nos
+/// testes para evitar I/O real. Padrão: [Socket.connect].
+typedef SocketConnector = Future<Socket> Function(String host, int port,
+    {Duration timeout});
+
+/// Lista as interfaces de rede disponíveis.
+///
+/// Seam de testabilidade para [NetworkPrinter.discoverPrinters].
+/// Padrão: [NetworkInterface.list].
+typedef NetworkInterfaceLister = Future<List<NetworkInterface>> Function();
+
+Future<Socket> _defaultSocketConnector(String host, int port,
+    {Duration timeout = const Duration(seconds: 5)}) {
+  return Socket.connect(host, port, timeout: timeout);
+}
+
+Future<List<NetworkInterface>> _defaultInterfaceLister() =>
+    NetworkInterface.list();
+
+/// Cliente TCP para impressoras de rede (raw socket).
 class NetworkPrinter {
   late String _host;
   int _port = 9100;
   bool _isConnected = false;
   Duration _timeout = const Duration(seconds: 5);
   Socket? _socket;
+  final SocketConnector _connector;
 
+  /// Cria um [NetworkPrinter] para [host]:[port].
+  ///
+  /// [connector] permite injetar a abertura de socket nos testes;
+  /// por padrão usa [Socket.connect].
   NetworkPrinter({
     required String host,
     int port = 9100,
     Duration timeout = const Duration(seconds: 5),
-  }) {
+    SocketConnector? connector,
+  }) : _connector = connector ?? _defaultSocketConnector {
     _host = host;
     _port = port;
     _timeout = timeout;
@@ -29,26 +57,31 @@ class NetworkPrinter {
       // Desconecta qualquer conexão anterior
       await disconnect();
 
-      log('Tentando conectar à impressora de rede em $_host:$_port', name: 'NETWORK_PRINTER');
+      log('Tentando conectar à impressora de rede em $_host:$_port',
+          name: 'NETWORK_PRINTER');
 
-      _socket = await Socket.connect(_host, _port, timeout: _timeout);
+      _socket = await _connector(_host, _port, timeout: _timeout);
       _isConnected = true;
 
-      log('Conectado com sucesso à impressora de rede em $_host:$_port', name: 'NETWORK_PRINTER');
+      log('Conectado com sucesso à impressora de rede em $_host:$_port',
+          name: 'NETWORK_PRINTER');
       return true;
     } catch (e) {
-      log('Erro ao conectar à impressora de rede em $_host:$_port: $e', name: 'NETWORK_PRINTER');
+      log('Erro ao conectar à impressora de rede em $_host:$_port: $e',
+          name: 'NETWORK_PRINTER');
       _isConnected = false;
       _socket = null;
       return false;
     }
   }
 
-  Future<bool> printBytes(List<int> bytes, {bool disconnectAfterPrint = true}) async {
+  Future<bool> printBytes(List<int> bytes,
+      {bool disconnectAfterPrint = true}) async {
     try {
       // Verifica se está conectado
       if (!_isConnected || _socket == null) {
-        log('Tentando reconectar antes de imprimir...', name: 'NETWORK_PRINTER');
+        log('Tentando reconectar antes de imprimir...',
+            name: 'NETWORK_PRINTER');
         final connected = await connect();
         if (!connected) {
           log('Falha ao conectar para impressão', name: 'NETWORK_PRINTER');
@@ -56,7 +89,8 @@ class NetworkPrinter {
         }
       }
 
-      log('Enviando ${bytes.length} bytes para impressão', name: 'NETWORK_PRINTER');
+      log('Enviando ${bytes.length} bytes para impressão',
+          name: 'NETWORK_PRINTER');
 
       _socket!.add(bytes);
       await _socket!.flush();
@@ -86,48 +120,64 @@ class NetworkPrinter {
         log('Desconectado com sucesso', name: 'NETWORK_PRINTER');
       }
     } catch (e) {
-      log('Erro ao desconectar impressora de rede: $e', name: 'NETWORK_PRINTER');
+      log('Erro ao desconectar impressora de rede: $e',
+          name: 'NETWORK_PRINTER');
     } finally {
       _socket = null;
       _isConnected = false;
     }
   }
 
+  /// Indica se há uma conexão de socket ativa.
   bool get isConnected => _isConnected && _socket != null;
 
+  /// Host da impressora.
   String get host => _host;
+
+  /// Porta da impressora.
   int get port => _port;
 
-  // Método para testar conectividade
+  /// Testa a conectividade abrindo e fechando um socket.
   Future<bool> testConnection() async {
     try {
-      final socket = await Socket.connect(_host, _port, timeout: _timeout);
+      final socket = await _connector(_host, _port, timeout: _timeout);
       await socket.close();
       return true;
     } catch (e) {
-      log('Teste de conexão falhou para $_host:$_port: $e', name: 'NETWORK_PRINTER');
+      log('Teste de conexão falhou para $_host:$_port: $e',
+          name: 'NETWORK_PRINTER');
       return false;
     }
   }
 
-  // Métodos estáticos para descobrir impressoras na rede
+  /// Descobre impressoras na rede local escaneando portas comuns.
+  ///
+  /// [connector] e [interfaceLister] são seams de testabilidade
+  /// (padrões: [Socket.connect] e [NetworkInterface.list]).
   static Future<List<NetworkPrinterInfo>> discoverPrinters({
     String? subnet,
     List<int> ports = const [9100, 515, 631],
     Duration timeout = const Duration(seconds: 2),
     Function(String)? onProgress,
+    SocketConnector? connector,
+    NetworkInterfaceLister? interfaceLister,
   }) async {
+    final socketConnector = connector ?? _defaultSocketConnector;
     final List<NetworkPrinterInfo> discoveredPrinters = [];
 
     try {
       // Se subnet não foi fornecido, tenta descobrir automaticamente
-      final networkSubnet = subnet ?? await _getLocalNetworkSubnet();
+      final networkSubnet = subnet ??
+          await _getLocalNetworkSubnet(
+              interfaceLister ?? _defaultInterfaceLister);
       if (networkSubnet == null) {
-        log('Não foi possível determinar a subnet da rede local', name: 'NETWORK_SCANNER');
+        log('Não foi possível determinar a subnet da rede local',
+            name: 'NETWORK_SCANNER');
         return discoveredPrinters;
       }
 
-      log('Iniciando descoberta de impressoras na subnet: $networkSubnet', name: 'NETWORK_SCANNER');
+      log('Iniciando descoberta de impressoras na subnet: $networkSubnet',
+          name: 'NETWORK_SCANNER');
       onProgress?.call('Iniciando descoberta na rede $networkSubnet...');
 
       // Gera lista de IPs para testar (ex: 192.168.1.1 a 192.168.1.254)
@@ -136,7 +186,8 @@ class NetworkPrinter {
 
       for (int i = 1; i <= 254; i++) {
         final ip = '$baseIp.$i';
-        futures.add(_testPrinterAtIP(ip, ports, timeout, discoveredPrinters, onProgress));
+        futures.add(_testPrinterAtIP(ip, ports, timeout, discoveredPrinters,
+            onProgress, socketConnector));
       }
 
       // Executa todos os testes em paralelo (em grupos para não sobrecarregar)
@@ -145,14 +196,18 @@ class NetworkPrinter {
         final batch = futures.skip(i).take(batchSize).toList();
         await Future.wait(batch);
 
-        final progress = ((i + batchSize) / futures.length * 100).clamp(0, 100).toInt();
+        final progress =
+            ((i + batchSize) / futures.length * 100).clamp(0, 100).toInt();
         onProgress?.call('Escaneando rede... $progress%');
       }
 
-      log('Descoberta finalizada. Encontradas ${discoveredPrinters.length} impressoras', name: 'NETWORK_SCANNER');
-      onProgress?.call('Descoberta finalizada. Encontradas ${discoveredPrinters.length} impressoras');
+      log('Descoberta finalizada. Encontradas ${discoveredPrinters.length} impressoras',
+          name: 'NETWORK_SCANNER');
+      onProgress?.call(
+          'Descoberta finalizada. Encontradas ${discoveredPrinters.length} impressoras');
     } catch (e) {
-      log('Erro durante descoberta de impressoras: $e', name: 'NETWORK_SCANNER');
+      log('Erro durante descoberta de impressoras: $e',
+          name: 'NETWORK_SCANNER');
       onProgress?.call('Erro durante descoberta: $e');
     }
 
@@ -165,10 +220,11 @@ class NetworkPrinter {
     Duration timeout,
     List<NetworkPrinterInfo> discoveredPrinters,
     Function(String)? onProgress,
+    SocketConnector connector,
   ) async {
     for (final port in ports) {
       try {
-        final socket = await Socket.connect(ip, port, timeout: timeout);
+        final socket = await connector(ip, port, timeout: timeout);
         await socket.close();
 
         // Se conseguiu conectar, é uma possível impressora
@@ -205,16 +261,23 @@ class NetworkPrinter {
     }
   }
 
-  static Future<String?> _getLocalNetworkSubnet() async {
+  static Future<String?> _getLocalNetworkSubnet(
+      NetworkInterfaceLister interfaceLister) async {
     try {
-      final interfaces = await NetworkInterface.list();
+      final interfaces = await interfaceLister();
 
       for (final interface in interfaces) {
         // Procura por interface Wi-Fi ou Ethernet ativa
-        if (interface.name.toLowerCase().contains('wlan') || interface.name.toLowerCase().contains('eth') || interface.name.toLowerCase().contains('wi-fi') || interface.name.toLowerCase().contains('en0')) {
+        if (interface.name.toLowerCase().contains('wlan') ||
+            interface.name.toLowerCase().contains('eth') ||
+            interface.name.toLowerCase().contains('wi-fi') ||
+            interface.name.toLowerCase().contains('en0')) {
           for (final address in interface.addresses) {
-            if (address.type == InternetAddressType.IPv4 && !address.isLoopback && address.address.startsWith('192.168.')) {
-              log('Interface de rede encontrada: ${interface.name} - ${address.address}', name: 'NETWORK_SCANNER');
+            if (address.type == InternetAddressType.IPv4 &&
+                !address.isLoopback &&
+                address.address.startsWith('192.168.')) {
+              log('Interface de rede encontrada: ${interface.name} - ${address.address}',
+                  name: 'NETWORK_SCANNER');
               return address.address;
             }
           }
@@ -224,8 +287,13 @@ class NetworkPrinter {
       // Fallback: procura qualquer interface IPv4 não-loopback
       for (final interface in interfaces) {
         for (final address in interface.addresses) {
-          if (address.type == InternetAddressType.IPv4 && !address.isLoopback && (address.address.startsWith('192.168.') || address.address.startsWith('10.') || address.address.startsWith('172.'))) {
-            log('Interface de rede encontrada (fallback): ${interface.name} - ${address.address}', name: 'NETWORK_SCANNER');
+          if (address.type == InternetAddressType.IPv4 &&
+              !address.isLoopback &&
+              (address.address.startsWith('192.168.') ||
+                  address.address.startsWith('10.') ||
+                  address.address.startsWith('172.'))) {
+            log('Interface de rede encontrada (fallback): ${interface.name} - ${address.address}',
+                name: 'NETWORK_SCANNER');
             return address.address;
           }
         }
@@ -238,12 +306,21 @@ class NetworkPrinter {
   }
 }
 
+/// Informações de uma impressora de rede descoberta.
 class NetworkPrinterInfo {
+  /// Endereço IP da impressora.
   final String ip;
+
+  /// Porta na qual a impressora respondeu.
   final int port;
+
+  /// Nome descritivo da impressora.
   final String name;
+
+  /// Descrição do protocolo/porta detectada.
   final String description;
 
+  /// Cria um [NetworkPrinterInfo].
   NetworkPrinterInfo({
     required this.ip,
     required this.port,

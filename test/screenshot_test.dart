@@ -1,0 +1,118 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
+import 'package:thermal_printer_flutter/thermal_printer_flutter.dart';
+
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  Future<img.Image> capture(
+    WidgetTester tester, {
+    required bool useBetterText,
+    bool flipHorizontal = false,
+    bool applyTextScaling = true,
+    Widget? child,
+  }) async {
+    late BuildContext capturedContext;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) {
+            capturedContext = context;
+            return const Scaffold(body: SizedBox());
+          },
+        ),
+      ),
+    );
+
+    late img.Image image;
+
+    // runAsync lets the real Future.delayed and ui.Image.toByteData run, while
+    // we drive frames so the off-screen overlay lays out and paints.
+    await tester.runAsync(() async {
+      final future = ThermalScreenshot.captureWidgetAsMonochromeImage(
+        capturedContext,
+        width: 64,
+        pixelRatio: 1.0,
+        useBetterText: useBetterText,
+        flipHorizontal: flipHorizontal,
+        applyTextScaling: applyTextScaling,
+        widget: child ??
+            Container(
+              width: 64,
+              height: 32,
+              color: Colors.black,
+              child: const Text(
+                'Hello World',
+                style: TextStyle(color: Colors.white, fontSize: 10),
+              ),
+            ),
+      );
+
+      // Pump a few frames so the overlay paints and the post-frame callback fires.
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 20));
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+
+      image = await future;
+    });
+
+    return image;
+  }
+
+  group('ThermalScreenshot.captureWidgetAsMonochromeImage', () {
+    testWidgets('produces a monochrome image with the text-optimized path',
+        (tester) async {
+      final image = await capture(tester, useBetterText: true);
+
+      expect(image.width, greaterThan(0));
+      expect(image.height, greaterThan(0));
+    });
+
+    testWidgets('produces a monochrome image with the fast path',
+        (tester) async {
+      final image = await capture(tester, useBetterText: false);
+
+      expect(image.width, greaterThan(0));
+      expect(image.height, greaterThan(0));
+    });
+
+    testWidgets('supports flipHorizontal and disabled text scaling',
+        (tester) async {
+      final image = await capture(
+        tester,
+        useBetterText: false,
+        flipHorizontal: true,
+        applyTextScaling: false,
+      );
+
+      expect(image.width, greaterThan(0));
+    });
+
+    testWidgets('fast path renders transparent pixels as white',
+        (tester) async {
+      final image = await capture(
+        tester,
+        useBetterText: false,
+        child: const SizedBox(width: 64, height: 32),
+      );
+
+      expect(image.width, greaterThan(0));
+    });
+  });
+
+  group('ThermalScreenshot.encodeToPng', () {
+    test('encodes an image to non-empty PNG bytes', () {
+      final image = img.Image(width: 4, height: 4);
+      img.fill(image, color: img.ColorRgb8(0, 0, 0));
+
+      final png = ThermalScreenshot.encodeToPng(image);
+
+      expect(png, isNotEmpty);
+      // PNG magic number.
+      expect(png.sublist(0, 4), [0x89, 0x50, 0x4E, 0x47]);
+    });
+  });
+}

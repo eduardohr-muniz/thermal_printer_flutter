@@ -1,3 +1,13 @@
+## 0.1.0
+
+- Added USB printing support on macOS (via CUPS)
+- Fixed `getPlatformVersion` to return the platform version through the method channel
+- Fixed double-result crash on Bluetooth (BLE) for iOS/macOS
+- Fixed multiple-copies bug when printing RAW on Windows
+- Byte payloads are now sent as `Uint8List` across all platforms
+- Renamed `PrinterType.bluethoot` to `PrinterType.bluetooth` (legacy alias kept and deprecated)
+- Added unit test coverage
+
 ## 0.0.1+6
 
 - Improved printing performance via Bluetooth

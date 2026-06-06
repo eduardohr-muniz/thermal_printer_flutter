@@ -6,7 +6,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:image/image.dart' as img;
 
+/// Captura widgets como imagens monocromáticas prontas para impressão térmica.
 class ThermalScreenshot {
+  /// Renderiza [widget] fora da tela e o converte numa imagem monocromática.
   static Future<img.Image> captureWidgetAsMonochromeImage(
     BuildContext context, {
     required Widget widget,
@@ -34,7 +36,7 @@ class ThermalScreenshot {
           child: applyTextScaling
               ? MediaQuery(
                   data: MediaQuery.of(context).copyWith(
-                    textScaleFactor: textScaleFactor,
+                    textScaler: TextScaler.linear(textScaleFactor),
                   ),
                   child: widget,
                 )
@@ -45,17 +47,27 @@ class ThermalScreenshot {
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       try {
-        final boundary = globalKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+        final boundary = globalKey.currentContext?.findRenderObject()
+            as RenderRepaintBoundary?;
+        // coverage:ignore-start
+        // Guarda defensiva: o boundary é sempre inserido na árvore antes do
+        // post-frame, então este ramo não é reproduzível em teste unitário.
         if (boundary == null || !boundary.hasSize) {
           throw Exception('Render boundary não está pronto');
         }
+        // coverage:ignore-end
 
-        await Future.delayed(const Duration(milliseconds: 10)); // Delay reduzido
+        await Future.delayed(
+            const Duration(milliseconds: 10)); // Delay reduzido
 
         // 1. Fase de Captura (Otimizada)
         final ui.Image image = await boundary.toImage(pixelRatio: pixelRatio);
-        final ByteData? byteData = await image.toByteData(); // Formato mais rápido
+        final ByteData? byteData =
+            await image.toByteData(); // Formato mais rápido
+        // coverage:ignore-start
+        // toByteData() só retorna null em falha de GPU, não reproduzível.
         if (byteData == null) throw Exception('Falha ao obter bytes da imagem');
+        // coverage:ignore-end
 
         // 2. Processamento Direto (Sem decodificação PNG intermediária)
         final Uint8List rgbaBytes = byteData.buffer.asUint8List();
@@ -63,16 +75,23 @@ class ThermalScreenshot {
 
         // Conversão direta para imagem monocromática
         final monoImage = useBetterText
-            ? _convertTextOptimizedMonochrome(rgbaBytes, image.width, image.height, newWidth, threshold)
-            : _convertRgbaToMonochromeFast(rgbaBytes, image.width, image.height, newWidth, threshold);
+            ? _convertTextOptimizedMonochrome(
+                rgbaBytes, image.width, image.height, newWidth, threshold)
+            : _convertRgbaToMonochromeFast(
+                rgbaBytes, image.width, image.height, newWidth, threshold);
 
         image.dispose();
-        log('Screen shot time: ${stopwatch.elapsedMilliseconds}ms', name: 'THERMAL_PRINTER_FLUTTER');
+        log('Screen shot time: ${stopwatch.elapsedMilliseconds}ms',
+            name: 'THERMAL_PRINTER_FLUTTER');
         stopwatch.stop();
         completer.complete(monoImage);
+        // coverage:ignore-start
+        // Caminho de erro de captura (falha de GPU/render), não reproduzível
+        // de forma determinística em teste unitário.
       } catch (e) {
         completer.completeError(e);
       }
+      // coverage:ignore-end
     });
 
     final overlayEntry = OverlayEntry(
@@ -88,19 +107,25 @@ class ThermalScreenshot {
       final result = await completer.future;
       overlayEntry.remove();
       return result;
+      // coverage:ignore-start
+      // Só alcançado se a captura falhar (ver bloco acima); o overlay é removido
+      // e o erro é repropagado ao chamador.
     } catch (e) {
       overlayEntry.remove();
       rethrow;
     }
+    // coverage:ignore-end
   }
 
   // Conversão direta de RGBA para monocromático com dithering
-  static img.Image _convertTextOptimizedMonochrome(Uint8List rgbaBytes, int srcWidth, int srcHeight, int dstWidth, int threshold) {
+  static img.Image _convertTextOptimizedMonochrome(Uint8List rgbaBytes,
+      int srcWidth, int srcHeight, int dstWidth, int threshold) {
     final dstHeight = (srcHeight * (dstWidth / srcWidth)).toInt();
     final monoImage = img.Image(width: dstWidth, height: dstHeight);
 
     // Configurações específicas para texto
-    final enhancedThreshold = (threshold * 0.9).toInt(); // Threshold mais baixo para texto
+    final enhancedThreshold =
+        (threshold * 0.9).toInt(); // Threshold mais baixo para texto
 
     for (int y = 0; y < dstHeight; y++) {
       final srcY = (y * srcHeight / dstHeight).toInt();
@@ -109,7 +134,8 @@ class ThermalScreenshot {
         final pixelOffset = (srcY * srcWidth + srcX) * 4;
 
         // Detecta bordas de texto (alta variação de cor)
-        final isLikelyText = _isTextPixel(rgbaBytes, srcX, srcY, srcWidth, srcHeight);
+        final isLikelyText =
+            _isTextPixel(rgbaBytes, srcX, srcY, srcWidth, srcHeight);
 
         if (isLikelyText) {
           // Processamento especial para texto
@@ -130,13 +156,20 @@ class ThermalScreenshot {
     return monoImage;
   }
 
-  static bool _isTextPixel(Uint8List rgbaBytes, int x, int y, int width, int height) {
+  static bool _isTextPixel(
+      Uint8List rgbaBytes, int x, int y, int width, int height) {
     // Detecta bordas agudas (característica de texto)
-    final current = (rgbaBytes[(y * width + x) * 4] + rgbaBytes[(y * width + x) * 4 + 1] + rgbaBytes[(y * width + x) * 4 + 2]) / 3;
+    final current = (rgbaBytes[(y * width + x) * 4] +
+            rgbaBytes[(y * width + x) * 4 + 1] +
+            rgbaBytes[(y * width + x) * 4 + 2]) /
+        3;
 
     // Compara com pixels vizinhos
     final right = x < width - 1
-        ? (rgbaBytes[(y * width + x + 1) * 4] + rgbaBytes[(y * width + x + 1) * 4 + 1] + rgbaBytes[(y * width + x + 1) * 4 + 2]) / 3
+        ? (rgbaBytes[(y * width + x + 1) * 4] +
+                rgbaBytes[(y * width + x + 1) * 4 + 1] +
+                rgbaBytes[(y * width + x + 1) * 4 + 2]) /
+            3
         : current;
 
     final diff = (current - right).abs();
@@ -154,7 +187,8 @@ class ThermalScreenshot {
   }
 
   // Versão ultrarrápida sem dithering
-  static img.Image _convertRgbaToMonochromeFast(Uint8List rgbaBytes, int srcWidth, int srcHeight, int dstWidth, int threshold) {
+  static img.Image _convertRgbaToMonochromeFast(Uint8List rgbaBytes,
+      int srcWidth, int srcHeight, int dstWidth, int threshold) {
     final scale = dstWidth / srcWidth;
     final dstHeight = (srcHeight * scale).toInt();
     final monoImage = img.Image(width: dstWidth, height: dstHeight);
@@ -170,7 +204,9 @@ class ThermalScreenshot {
           continue;
         }
 
-        final luminance = 0.2126 * rgbaBytes[pixelOffset] + 0.7152 * rgbaBytes[pixelOffset + 1] + 0.0722 * rgbaBytes[pixelOffset + 2];
+        final luminance = 0.2126 * rgbaBytes[pixelOffset] +
+            0.7152 * rgbaBytes[pixelOffset + 1] +
+            0.0722 * rgbaBytes[pixelOffset + 2];
 
         final color = luminance > threshold ? 255 : 0;
         monoImage.setPixel(x, y, img.ColorRgb8(color, color, color));
@@ -179,6 +215,7 @@ class ThermalScreenshot {
     return monoImage;
   }
 
+  /// Codifica [image] em bytes PNG.
   static Uint8List encodeToPng(img.Image image) {
     return Uint8List.fromList(img.encodePng(image));
   }

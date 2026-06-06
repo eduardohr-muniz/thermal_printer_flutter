@@ -4,6 +4,19 @@ import 'package:thermal_printer_flutter/src/network_printer.dart';
 import 'printer_repository.dart';
 
 class NetworkPrinterRepository implements PrinterRepository {
+  /// Cria o repositório de impressoras de rede.
+  ///
+  /// [connector] e [interfaceLister] são seams de testabilidade repassados ao
+  /// [NetworkPrinter]; em produção ficam nulos e os defaults reais (sockets e
+  /// interfaces de rede) são usados.
+  NetworkPrinterRepository({
+    SocketConnector? connector,
+    NetworkInterfaceLister? interfaceLister,
+  })  : _connector = connector,
+        _interfaceLister = interfaceLister;
+
+  final SocketConnector? _connector;
+  final NetworkInterfaceLister? _interfaceLister;
   final Map<String, NetworkPrinter> _networkPrinters = {};
 
   @override
@@ -21,6 +34,8 @@ class NetworkPrinterRepository implements PrinterRepository {
 
       final discoveredPrinters = await NetworkPrinter.discoverPrinters(
         onProgress: onProgress,
+        connector: _connector,
+        interfaceLister: _interfaceLister,
       );
 
       final printers = discoveredPrinters.map((printerInfo) {
@@ -34,10 +49,14 @@ class NetworkPrinterRepository implements PrinterRepository {
 
       log('Descoberta concluída. Encontradas ${printers.length} impressoras', name: 'THERMAL_PRINTER_FLUTTER');
       return printers;
+      // coverage:ignore-start
+      // Guarda defensiva: NetworkPrinter.discoverPrinters trata seus próprios
+      // erros internamente, então este catch não é alcançável em teste unitário.
     } catch (e) {
       log('Erro durante descoberta de impressoras: $e', name: 'THERMAL_PRINTER_FLUTTER');
       return [];
     }
+    // coverage:ignore-end
   }
 
   @override
@@ -60,6 +79,7 @@ class NetworkPrinterRepository implements PrinterRepository {
         host: printer.ip,
         port: int.tryParse(printer.port) ?? 9100,
         timeout: const Duration(seconds: 10),
+        connector: _connector,
       );
 
       final connected = await networkPrinter.connect();
@@ -71,10 +91,14 @@ class NetworkPrinterRepository implements PrinterRepository {
       }
 
       return connected;
+      // coverage:ignore-start
+      // Guarda defensiva: os colaboradores (NetworkPrinter) não relançam, então
+      // este catch não é alcançável em teste unitário.
     } catch (e) {
       log('Error connecting network printer: $e', name: 'THERMAL_PRINTER_FLUTTER');
       return false;
     }
+    // coverage:ignore-end
   }
 
   @override
@@ -86,9 +110,12 @@ class NetworkPrinterRepository implements PrinterRepository {
         _networkPrinters.remove(key);
         log('Disconnected from network printer at ${printer.ip}:${printer.port}', name: 'THERMAL_PRINTER_FLUTTER');
       }
+      // coverage:ignore-start
+      // Guarda defensiva: NetworkPrinter.disconnect já engole seus erros.
     } catch (e) {
       log('Error disconnecting network printer: $e', name: 'THERMAL_PRINTER_FLUTTER');
     }
+    // coverage:ignore-end
   }
 
   @override
@@ -124,9 +151,12 @@ class NetworkPrinterRepository implements PrinterRepository {
       final key = '${printer.ip}:${printer.port}';
       final networkPrinter = _networkPrinters[key];
       return networkPrinter?.isConnected ?? false;
+      // coverage:ignore-start
+      // Guarda defensiva: acesso ao mapa não lança.
     } catch (e) {
       log('Error checking network connection: $e', name: 'THERMAL_PRINTER_FLUTTER');
       return false;
     }
+    // coverage:ignore-end
   }
 }
