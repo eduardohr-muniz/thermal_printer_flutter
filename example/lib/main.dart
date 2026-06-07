@@ -8,7 +8,7 @@ import 'package:thermal_printer_flutter/thermal_printer_flutter.dart';
 import 'package:thermal_printer_flutter_example/src/order_widget.dart';
 
 void main() {
-  runApp(MaterialApp(home: const MyApp()));
+  runApp(const MyApp());
 }
 
 class MyApp extends StatefulWidget {
@@ -34,6 +34,11 @@ class _MyAppState extends State<MyApp> {
   String _discoveryProgress = '';
   bool _isCheckingStatus = false;
 
+  // Opções de impressão / descoberta (casos de uso novos).
+  int _copies = 1;
+  bool _flipHorizontal = false;
+  bool _requireConfirmation = false;
+
   @override
   void initState() {
     super.initState();
@@ -42,6 +47,8 @@ class _MyAppState extends State<MyApp> {
 
   @override
   void dispose() {
+    // Fecha conexões de rede em pool ao descartar o plugin.
+    _thermalPrinterFlutterPlugin.dispose();
     _ipController.dispose();
     _portController.dispose();
     if (_currentBanner != null) {
@@ -230,43 +237,72 @@ class _MyAppState extends State<MyApp> {
     _portController.text = '9100';
   }
 
-  Future<void> _printTest() async {
-    if (_selectedPrinter == null) return;
+  /// Monta um recibo ESC/POS. Quando [withImage] é true, captura o
+  /// `OrderWidget` como imagem (exercitando `screenShotWidget` + `flipHorizontal`).
+  Future<List<int>> _buildReceiptBytes({required bool withImage}) async {
+    final generator = Generator(PaperSize.mm80, await CapabilityProfile.load());
+    List<int> bytes = [];
+    bytes += generator.reset();
+    bytes += generator.text('Print Test',
+        styles: const PosStyles(
+          align: PosAlign.center,
+          bold: true,
+          height: PosTextSize.size2,
+          width: PosTextSize.size2,
+        ));
+    bytes += generator.feed(1);
+    bytes += generator.text('Date: ${DateTime.now()}');
+    bytes += generator.text('Copies: $_copies   Flip: $_flipHorizontal');
+    bytes += generator.feed(1);
+
+    if (withImage && mounted) {
+      final image = await _thermalPrinterFlutterPlugin.screenShotWidget(
+        context,
+        widget: OrderWidget(),
+        pixelRatio: 5.0,
+        flipHorizontal: _flipHorizontal,
+      );
+      bytes += generator.imageRaster(image);
+    }
+
+    bytes += generator.feed(2);
+    bytes += generator.cut();
+    return bytes;
+  }
+
+  Future<void> _printTest({required bool withImage}) async {
+    if (_selectedPrinter == null) {
+      _showBanner('Selecione uma impressora primeiro', isError: true);
+      return;
+    }
 
     try {
-      final generator =
-          Generator(PaperSize.mm80, await CapabilityProfile.load());
-      List<int> bytes = [];
-      bytes += generator.reset();
-      bytes += generator.text('Print Test',
-          styles: const PosStyles(
-            align: PosAlign.center,
-            bold: true,
-            height: PosTextSize.size2,
-            width: PosTextSize.size2,
-          ));
-      bytes += generator.feed(2);
-      bytes += generator.text('Date: ${DateTime.now()}');
-      bytes += generator.feed(2);
-      bytes += generator.text('This is a test print');
-      bytes += generator.feed(2);
-      bytes += generator.cut();
-      if (mounted) {
-        final image = await _thermalPrinterFlutterPlugin.screenShotWidget(
-          context,
-          widget: OrderWidget(),
-          pixelRatio: 5.0,
-        );
-        bytes += generator.imageRaster(image);
-      }
-
-      bytes += generator.feed(2);
-      bytes += generator.cut();
+      final bytes = await _buildReceiptBytes(withImage: withImage);
+      // `copies` repete o payload num único job (idêntico em toda plataforma).
       await _thermalPrinterFlutterPlugin.printBytes(
-          bytes: bytes, printer: _selectedPrinter!);
+        bytes: bytes,
+        printer: _selectedPrinter!,
+        copies: _copies,
+      );
+      _showBanner('Enviado para impressão ($_copies cópia(s))');
     } catch (e) {
       print('Error printing: $e');
+      _showBanner('Erro ao imprimir: $e', isError: true);
     }
+  }
+
+  /// Demonstra `dispose()`: fecha as conexões de rede em pool.
+  Future<void> _disposePlugin() async {
+    await _thermalPrinterFlutterPlugin.dispose();
+    if (!mounted) return;
+    setState(() {
+      for (var i = 0; i < _printers.length; i++) {
+        if (_printers[i].type == PrinterType.network) {
+          _printers[i] = _printers[i].copyWith(isConnected: false);
+        }
+      }
+    });
+    _showBanner('dispose() chamado — conexões de rede fechadas');
   }
 
   void _showBanner(String message, {bool isError = false}) {
@@ -392,6 +428,7 @@ class _MyAppState extends State<MyApp> {
 
       final discoveredPrinters =
           await _thermalPrinterFlutterPlugin.discoverNetworkPrinters(
+        requireConfirmation: _requireConfirmation,
         onProgress: (progress) {
           setState(() {
             _discoveryProgress = progress;
@@ -443,7 +480,7 @@ class _MyAppState extends State<MyApp> {
     }
 
     if (_selectedPrinter!.type != PrinterType.usb) {
-      _showBanner('Leitura de status disponível apenas para impressoras USB no Windows', isError: true);
+      _showBanner('Leitura de status disponível apenas para impressoras USB (Windows/macOS)', isError: true);
       return;
     }
 
@@ -670,18 +707,74 @@ class _MyAppState extends State<MyApp> {
                         Text('Connecting...'),
                       ],
                     )
-                  else
+                  else ...[
+                    // Opções de impressão (cópias + espelhamento).
+                    Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(12.0),
+                        child: Column(
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                const Text('Cópias (copies):'),
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    IconButton(
+                                      icon: const Icon(
+                                          Icons.remove_circle_outline),
+                                      onPressed: _copies > 1
+                                          ? () => setState(() => _copies--)
+                                          : null,
+                                    ),
+                                    Text('$_copies',
+                                        style: const TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.bold)),
+                                    IconButton(
+                                      icon: const Icon(Icons.add_circle_outline),
+                                      onPressed: _copies < 10
+                                          ? () => setState(() => _copies++)
+                                          : null,
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                            SwitchListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text(
+                                  'Espelhar imagem (flipHorizontal)'),
+                              value: _flipHorizontal,
+                              onChanged: (v) =>
+                                  setState(() => _flipHorizontal = v),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
                     Wrap(
                       alignment: WrapAlignment.center,
                       spacing: 10,
                       runSpacing: 10,
                       children: [
-                        ElevatedButton(
+                        ElevatedButton.icon(
                           onPressed: (_selectedPrinter?.isConnected == true ||
                                   _selectedPrinter?.type == PrinterType.usb)
-                              ? _printTest
+                              ? () => _printTest(withImage: true)
                               : null,
-                          child: const Text('Print Test'),
+                          icon: const Icon(Icons.image),
+                          label: const Text('Print (imagem)'),
+                        ),
+                        ElevatedButton.icon(
+                          onPressed: (_selectedPrinter?.isConnected == true ||
+                                  _selectedPrinter?.type == PrinterType.usb)
+                              ? () => _printTest(withImage: false)
+                              : null,
+                          icon: const Icon(Icons.text_fields),
+                          label: const Text('Print (texto)'),
                         ),
                         ElevatedButton(
                           onPressed: _selectedPrinter?.isConnected == true
@@ -710,20 +803,24 @@ class _MyAppState extends State<MyApp> {
                           child: const Text('Desconectar'),
                         ),
                         ElevatedButton.icon(
-                          onPressed: (_selectedPrinter != null && _selectedPrinter!.type == PrinterType.usb && !_isCheckingStatus)
+                          onPressed: (_selectedPrinter != null &&
+                                  _selectedPrinter!.type == PrinterType.usb &&
+                                  !_isCheckingStatus)
                               ? _fetchPrinterStatus
                               : null,
                           icon: _isCheckingStatus
                               ? const SizedBox(
                                   width: 16,
                                   height: 16,
-                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                  child:
+                                      CircularProgressIndicator(strokeWidth: 2),
                                 )
                               : const Icon(Icons.info_outline),
                           label: const Text('Status (USB)'),
                         ),
                       ],
                     ),
+                  ],
                 ],
                 const SizedBox(height: 20),
                 // Seção para descoberta automática de impressoras
@@ -747,6 +844,19 @@ class _MyAppState extends State<MyApp> {
                             fontSize: 12,
                             color: Colors.grey,
                           ),
+                        ),
+                        SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('Somente confirmadas '
+                              '(requireConfirmation)'),
+                          subtitle: const Text(
+                            'Confirma via sonda ESC/POS na porta 9100 e '
+                            'descarta falsos positivos',
+                            style: TextStyle(fontSize: 11),
+                          ),
+                          value: _requireConfirmation,
+                          onChanged: (v) =>
+                              setState(() => _requireConfirmation = v),
                         ),
                         const SizedBox(height: 16),
                         if (_isDiscovering) ...[
@@ -831,6 +941,13 @@ class _MyAppState extends State<MyApp> {
                     ),
                   ),
                 ),
+                const SizedBox(height: 20),
+                OutlinedButton.icon(
+                  onPressed: _disposePlugin,
+                  icon: const Icon(Icons.cleaning_services_outlined),
+                  label: const Text('dispose() — fechar conexões de rede'),
+                ),
+                const SizedBox(height: 20),
               ],
             ),
           ),
