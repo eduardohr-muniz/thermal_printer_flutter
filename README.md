@@ -13,6 +13,12 @@ Flutter plugin for thermal printing with support for multiple platforms and conn
 | Linux    | ❌  | ❌        | ✅      |
 | Web      | ❌  | ❌        | 🚧      |
 
+> **Notes / known limitations**
+> - `getPrinterStatus` returns real data only for **USB printers on Windows** (queried from the spooler). For Bluetooth/Network it returns `PrinterStatus.unknown`.
+> - `isConnected` for USB always returns `true`: USB/spooler printers are connectionless in this plugin (`connect()` is a no-op). Use `getPrinterStatus` to check whether a Windows USB printer is actually online/out of paper.
+> - Bluetooth currently manages a **single active connection**; `disconnect()` closes the active connection regardless of which `Printer` is passed.
+> - Automatic network discovery flags **any host** with an open printer port (9100/515/631) as a printer, so it may report non-printers (e.g. desktops running CUPS on 631). Treat results as candidates.
+
 ## Features
 
 - **Multiple Connection Types**: Support for USB, Bluetooth, and Network printers

@@ -15,6 +15,9 @@
 - Network discovery now only auto-detects genuinely private subnets (correct `172.16.0.0/12` range) and prunes dead pooled connections.
 - Windows printer status descriptions are now in English (was mixed Portuguese).
 - Removed unused internal platform helper.
+- USB `isConnected` now returns `true` (connectionless model) instead of relying on an unimplemented/meaningless channel call; use `getPrinterStatus` for real USB health.
+- Documented the `writebytes` wire contract (USB sends a `Map`, Bluetooth sends raw bytes — this is how macOS routes USB-via-CUPS vs BLE) and locked it with tests.
+- Documented platform/feature limitations in the README (status, isConnected, single BLE connection, discovery false positives).
 - Added unit test coverage (100% of the Dart library).
 
 ## 0.0.1+6

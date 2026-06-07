@@ -46,6 +46,10 @@ class UsbPrinterRepository implements PrinterRepository {
   Future<void> printBytes(
       {required List<int> bytes, required Printer printer}) async {
     try {
+      // Contrato de fio do `writebytes` (NÃO unificar com o caminho Bluetooth):
+      // o caminho USB envia um Map {bytes, printerName}. No macOS é justamente
+      // a presença de `printerName` que faz o handler rotear para o CUPS (USB)
+      // em vez do BLE. Trocar para bytes crus quebraria o roteamento do macOS.
       final bool result = await _channel.invokeMethod<bool>(
             'writebytes',
             <String, dynamic>{
@@ -66,16 +70,10 @@ class UsbPrinterRepository implements PrinterRepository {
 
   @override
   Future<bool> isConnected(Printer printer) async {
-    try {
-      final bool result = await _channel.invokeMethod<bool>(
-            'isConnected',
-            printer.usbAddress,
-          ) ??
-          false;
-      return result;
-    } catch (e) {
-      log('Error checking USB connection: $e', name: 'THERMAL_PRINTER_FLUTTER');
-      return false;
-    }
+    // Impressoras USB/spooler são tratadas como sem estado de conexão
+    // (connect() é sempre true e disconnect() é no-op), então estão sempre
+    // "conectadas" enquanto enumeradas. Para saúde real (online, papel,
+    // tampa) use getPrinterStatus, que consulta o spooler no Windows.
+    return true;
   }
 }

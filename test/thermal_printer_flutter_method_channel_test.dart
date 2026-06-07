@@ -207,17 +207,15 @@ void main() {
       );
     });
 
-    test('usb isConnected delegates to the channel', () async {
-      mockHandler((call) async {
-        expect(call.method, 'isConnected');
-        return true;
-      });
+    test('usb isConnected returns true without a channel call', () async {
+      mockHandler((_) async => null);
 
       expect(
         await platform.isConnected(
             printer: const Printer(type: PrinterType.usb, usbAddress: 'u1')),
         isTrue,
       );
+      expect(calls, isEmpty);
     });
 
     test('bluetooth isConnected delegates to the channel', () async {

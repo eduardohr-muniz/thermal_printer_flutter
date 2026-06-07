@@ -127,32 +127,16 @@ void main() {
   });
 
   group('isConnected', () {
-    test('returns the channel result', () async {
-      mockHandler((call) async {
-        expect(call.method, 'isConnected');
-        expect(call.arguments, 'usb-addr');
-        return true;
-      });
+    test('returns true without touching the channel (connectionless)',
+        () async {
+      mockHandler((_) async => null);
 
       final result = await repository.isConnected(
         const Printer(type: PrinterType.usb, usbAddress: 'usb-addr'),
       );
 
       expect(result, isTrue);
-    });
-
-    test('returns false when channel returns null', () async {
-      mockHandler((_) async => null);
-
-      expect(await repository.isConnected(const Printer(type: PrinterType.usb)),
-          isFalse);
-    });
-
-    test('returns false on PlatformException', () async {
-      mockHandler((_) async => throw PlatformException(code: 'ERR'));
-
-      expect(await repository.isConnected(const Printer(type: PrinterType.usb)),
-          isFalse);
+      expect(calls, isEmpty);
     });
   });
 }

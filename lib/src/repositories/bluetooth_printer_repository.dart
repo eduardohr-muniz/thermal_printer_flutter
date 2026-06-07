@@ -85,6 +85,10 @@ class BluetoothPrinterRepository implements PrinterRepository {
   Future<void> printBytes(
       {required List<int> bytes, required Printer printer}) async {
     try {
+      // Contrato de fio do `writebytes` (NÃO unificar com o caminho USB):
+      // o caminho Bluetooth envia bytes crus (Uint8List), sem Map. No macOS
+      // é a AUSÊNCIA de `printerName` que faz o handler rotear para o BLE em
+      // vez do CUPS. Enviar um Map aqui faria o macOS tentar imprimir via USB.
       await _channel.invokeMethod('writebytes', Uint8List.fromList(bytes));
     } catch (e) {
       log('Erro ao imprimir bytes: $e', name: 'THERMAL_PRINTER_FLUTTER');
