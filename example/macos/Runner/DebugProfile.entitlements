@@ -11,6 +11,9 @@
 	<!-- thermal_printer_flutter -->
 	<key>com.apple.security.device.bluetooth</key>
 	<true/>
+	<!-- Required for USB printing through the system print queue (CUPS) -->
+	<key>com.apple.security.print</key>
+	<true/>
 	<!-- thermal_printer_flutter -->
 </dict>
 </plist>

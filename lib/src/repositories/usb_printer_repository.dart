@@ -9,7 +9,8 @@ class UsbPrinterRepository implements PrinterRepository {
   @override
   Future<List<Printer>> getPrinters() async {
     try {
-      final List<dynamic>? devices = await _channel.invokeMethod<List<dynamic>>('usbprinters');
+      final List<dynamic>? devices =
+          await _channel.invokeMethod<List<dynamic>>('usbprinters');
       return devices?.map((device) {
             if (device is Map) {
               return Printer(
@@ -42,12 +43,13 @@ class UsbPrinterRepository implements PrinterRepository {
   }
 
   @override
-  Future<void> printBytes({required List<int> bytes, required Printer printer}) async {
+  Future<void> printBytes(
+      {required List<int> bytes, required Printer printer}) async {
     try {
       final bool result = await _channel.invokeMethod<bool>(
             'writebytes',
             <String, dynamic>{
-              'bytes': bytes,
+              'bytes': Uint8List.fromList(bytes),
               'printerName': printer.name,
             },
           ) ??
