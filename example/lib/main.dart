@@ -39,6 +39,10 @@ class _MyAppState extends State<MyApp> {
   bool _flipHorizontal = false;
   bool _requireConfirmation = false;
 
+  // Contexto abaixo do MaterialApp (definido no build via Builder), usado
+  // por screenShotWidget (Overlay) e showDialog (Navigator).
+  late BuildContext _rootContext;
+
   @override
   void initState() {
     super.initState();
@@ -257,7 +261,7 @@ class _MyAppState extends State<MyApp> {
 
     if (withImage && mounted) {
       final image = await _thermalPrinterFlutterPlugin.screenShotWidget(
-        context,
+        _rootContext,
         widget: OrderWidget(),
         pixelRatio: 5.0,
         flipHorizontal: _flipHorizontal,
@@ -493,7 +497,7 @@ class _MyAppState extends State<MyApp> {
       if (!mounted) return;
 
       await showDialog<void>(
-        context: context,
+        context: _rootContext,
         builder: (context) {
           return AlertDialog(
             title: Text('Status da impressora\n${_selectedPrinter!.name}', textAlign: TextAlign.center),
@@ -567,10 +571,14 @@ class _MyAppState extends State<MyApp> {
   Widget build(BuildContext context) {
     return MaterialApp(
       scaffoldMessengerKey: _messengerKey,
-      home: Scaffold(
-        appBar: AppBar(
-          title: const Text('Thermal Printer Example'),
-        ),
+      // `Builder` dá um contexto ABAIXO do MaterialApp — necessário para
+      // `screenShotWidget` (Overlay.of) e `showDialog` (Navigator.of).
+      home: Builder(builder: (context) {
+        _rootContext = context;
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('Thermal Printer Example'),
+          ),
         body: Padding(
           padding: const EdgeInsets.all(16.0),
           child: SingleChildScrollView(
@@ -952,7 +960,8 @@ class _MyAppState extends State<MyApp> {
             ),
           ),
         ),
-      ),
+        );
+      }),
     );
   }
 }
