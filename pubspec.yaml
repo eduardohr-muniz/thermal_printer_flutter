@@ -19,8 +19,8 @@ dependencies:
     sdk: flutter
   plugin_platform_interface: ^2.0.2
   esc_pos_utils_plus: ^2.0.4
-  web: ">=0.5.1"
-  image: ">=4.5.4"
+  web: ">=0.5.1 <2.0.0"
+  image: ">=4.5.4 <5.0.0"
 
 dev_dependencies:
   flutter_test:
