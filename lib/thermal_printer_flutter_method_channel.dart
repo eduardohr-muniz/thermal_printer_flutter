@@ -181,4 +181,9 @@ class MethodChannelThermalPrinterFlutter
       return PrinterStatus.unknown;
     }
   }
+
+  @override
+  Future<void> dispose() async {
+    await _networkRepository.dispose();
+  }
 }

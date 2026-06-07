@@ -166,6 +166,15 @@ class ThermalPrinterFlutter implements ThermalPrinterFlutterPlatform {
         .getPrinterStatus(printer: printer);
   }
 
+  /// Libera recursos retidos pelo plugin (conexões de rede em pool).
+  ///
+  /// Chame ao descartar o plugin para não vazar sockets abertos.
+  @override
+  Future<void> dispose() async {
+    await ThermalPrinterFlutterPlatform.instance.dispose();
+    await _networkRepository.dispose();
+  }
+
   /// Renderiza [widget] e retorna a imagem monocromática pronta para impressão.
   Future<img.Image> screenShotWidget(
     BuildContext context, {

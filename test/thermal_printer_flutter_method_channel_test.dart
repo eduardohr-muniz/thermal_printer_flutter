@@ -280,6 +280,14 @@ void main() {
     });
   });
 
+  group('dispose', () {
+    test('completes and closes pooled network connections', () async {
+      // Empty pool: should complete without touching the channel.
+      await platform.dispose();
+      expect(calls, isEmpty);
+    });
+  });
+
   group('Windows blocks Bluetooth', () {
     late MethodChannelThermalPrinterFlutter win;
 

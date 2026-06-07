@@ -150,6 +150,18 @@ class NetworkPrinterRepository implements PrinterRepository {
     }
   }
 
+  /// Fecha todas as conexões de rede em pool e limpa o estado.
+  ///
+  /// Deve ser chamado no teardown do app para não vazar sockets abertos
+  /// (impressões usam `disconnectAfterPrint: false`, mantendo a conexão viva).
+  Future<void> dispose() async {
+    final printers = List<NetworkPrinter>.from(_networkPrinters.values);
+    _networkPrinters.clear();
+    for (final printer in printers) {
+      await printer.disconnect();
+    }
+  }
+
   @override
   Future<bool> isConnected(Printer printer) async {
     try {

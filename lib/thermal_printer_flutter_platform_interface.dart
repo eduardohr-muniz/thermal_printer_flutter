@@ -62,4 +62,9 @@ abstract class ThermalPrinterFlutterPlatform extends PlatformInterface {
   Future<PrinterStatus> getPrinterStatus({required Printer printer}) {
     throw UnimplementedError('getPrinterStatus() has not been implemented.');
   }
+
+  /// Libera recursos retidos (ex.: conexões de rede em pool).
+  ///
+  /// Default no-op; implementações que mantêm estado devem sobrescrever.
+  Future<void> dispose() async {}
 }

@@ -84,6 +84,11 @@ class _MockPlatform
     lastPrinter = printer;
     return PrinterStatus.unknown;
   }
+
+  @override
+  Future<void> dispose() async {
+    calls.add('dispose');
+  }
 }
 
 void main() {
@@ -121,6 +126,10 @@ void main() {
           () => base.getPrinterStatus(
               printer: const Printer(type: PrinterType.usb)),
           throwsUnimplementedError);
+    });
+
+    test('base dispose is a no-op (does not throw)', () async {
+      await _BarePlatform().dispose();
     });
   });
 
@@ -257,6 +266,11 @@ void main() {
       expect(status, isA<PrinterStatus>());
       expect(mock.calls, contains('getPrinterStatus'));
       expect(mock.lastPrinter, printer);
+    });
+
+    test('dispose delegates to the platform', () async {
+      await plugin.dispose();
+      expect(mock.calls, contains('dispose'));
     });
 
     testWidgets('screenShotWidget captures the given widget', (tester) async {

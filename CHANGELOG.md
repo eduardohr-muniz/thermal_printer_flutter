@@ -20,6 +20,9 @@
 - Documented platform/feature limitations in the README (status, isConnected, single BLE connection, discovery false positives).
 - Network discovery can now confirm a candidate is a real printer via an ESC/POS `DLE EOT` probe on port 9100: `NetworkPrinterInfo.confirmed` flags the result, and `discoverNetworkPrinters(requireConfirmation: true)` returns only confirmed printers (default `false` keeps the previous candidate-listing behavior).
 - Removed dead `printstring`/`printBytes` method handlers from the iOS/macOS plugins (never invoked from Dart).
+- **Fixed Bluetooth discovery on iOS:** the Dart layer lists printers via the `pairedbluetooths` channel method, but the iOS plugin only handled `getPrinters`, so `getPrinters(printerType: bluetooth)` always returned an empty list on iOS. iOS now handles `pairedbluetooths` (runs a short BLE scan).
+- Added `dispose()` to the plugin to close pooled network connections (prevents leaked sockets on teardown).
+- Removed the dead `getPrinters` channel handler from the Windows plugin (Dart calls `usbprinters` directly).
 - Added unit test coverage (100% of the Dart library).
 
 ## 0.0.1+6

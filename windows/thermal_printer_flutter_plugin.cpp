@@ -451,22 +451,6 @@ void ThermalPrinterFlutterPlugin::HandleMethodCall(
     return;
   }
 
-  // ── getPrinters ────────────────────────────────────────────────────────
-  // Accepts {"printerType": "usb"|"bluetooth"|"bluethoot"|"network"}
-  // On Windows only USB/spooler printers are meaningful; always returns USB list.
-  if (method == "getPrinters") {
-    flutter::EncodableList list;
-    for (const auto& name : GetPrinters()) {
-      flutter::EncodableMap entry;
-      entry[flutter::EncodableValue("name")]        = flutter::EncodableValue(name);
-      entry[flutter::EncodableValue("type")]        = flutter::EncodableValue(std::string("usb"));
-      entry[flutter::EncodableValue("isConnected")] = flutter::EncodableValue(true);
-      list.push_back(flutter::EncodableValue(entry));
-    }
-    result->Success(flutter::EncodableValue(list));
-    return;
-  }
-
   // ── writebytes ─────────────────────────────────────────────────────────
   // Wire contract: argument is Map {"bytes": Uint8List, "printerName": String}
   // bytes may arrive as vector<uint8_t> (FlutterStandardTypedData) or

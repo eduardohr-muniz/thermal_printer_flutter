@@ -58,6 +58,11 @@ public class SwiftThermalPrinterFlutterPlugin: NSObject, CBCentralManagerDelegat
         case "getPrinters":
             handleGetPrinters(call: call, result: result)
 
+        case "pairedbluetooths":
+            // Dart's Bluetooth repository lists printers via `pairedbluetooths`.
+            // On iOS there are no "paired" BLE devices, so we run a short scan.
+            scanForBluetoothPrinters(result: result)
+
         case "connect":
             handleConnect(call: call, result: result)
 
@@ -85,18 +90,23 @@ public class SwiftThermalPrinterFlutterPlugin: NSObject, CBCentralManagerDelegat
         }
         let isBluetoothType = printerType == "bluetooth" || printerType == "bluethoot"
         if isBluetoothType {
-            discoveredDevices.removeAll()
-            centralManager?.scanForPeripherals(withServices: nil, options: nil)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
-                guard let self = self else { return }
-                self.centralManager?.stopScan()
-                let printers = self.buildBluetoothDeviceList(from: self.discoveredDevices)
-                result(printers)
-            }
-        } else if printerType == "usb" {
-            result([])
+            scanForBluetoothPrinters(result: result)
         } else {
+            // USB / network are not handled on iOS via this path.
             result([])
+        }
+    }
+
+    /// Scans for nearby BLE peripherals for ~5s and returns them as printer maps.
+    /// Shared by both the `getPrinters` and `pairedbluetooths` channel methods.
+    private func scanForBluetoothPrinters(result: @escaping FlutterResult) {
+        discoveredDevices.removeAll()
+        centralManager?.scanForPeripherals(withServices: nil, options: nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
+            guard let self = self else { return }
+            self.centralManager?.stopScan()
+            let printers = self.buildBluetoothDeviceList(from: self.discoveredDevices)
+            result(printers)
         }
     }
 

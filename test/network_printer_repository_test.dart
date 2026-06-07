@@ -74,4 +74,31 @@ void main() {
       );
     });
   });
+
+  group('dispose', () {
+    test('closes pooled connections and clears the pool', () async {
+      final socket = _MockSocket();
+      when(() => socket.add(any())).thenReturn(null);
+      when(() => socket.flush()).thenAnswer((_) async {});
+      when(() => socket.close()).thenAnswer((_) async {});
+
+      final repo = NetworkPrinterRepository(
+        connector: (host, port, {timeout = const Duration(seconds: 5)}) async =>
+            socket,
+      );
+      const printer = Printer(type: PrinterType.network, ip: '1.2.3.4');
+
+      expect(await repo.connect(printer), isTrue);
+      expect(await repo.isConnected(printer), isTrue);
+
+      await repo.dispose();
+
+      expect(await repo.isConnected(printer), isFalse);
+      verify(() => socket.close()).called(greaterThanOrEqualTo(1));
+    });
+
+    test('is safe with an empty pool', () async {
+      await repository.dispose();
+    });
+  });
 }
