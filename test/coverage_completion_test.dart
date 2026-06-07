@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
@@ -39,6 +40,24 @@ void main() {
     when(() => socket.add(any())).thenReturn(null);
     when(() => socket.flush()).thenAnswer((_) async {});
     when(() => socket.close()).thenAnswer((_) async {});
+    when(() => socket.listen(
+          any(),
+          onError: any(named: 'onError'),
+          onDone: any(named: 'onDone'),
+          cancelOnError: any(named: 'cancelOnError'),
+        )).thenAnswer((invocation) {
+      final onData =
+          invocation.positionalArguments[0] as void Function(Uint8List)?;
+      final onError = invocation.namedArguments[#onError] as Function?;
+      final onDone = invocation.namedArguments[#onDone] as void Function()?;
+      final cancelOnError = invocation.namedArguments[#cancelOnError] as bool?;
+      return const Stream<Uint8List>.empty().listen(
+        onData,
+        onError: onError,
+        onDone: onDone,
+        cancelOnError: cancelOnError,
+      );
+    });
     return socket;
   }
 
@@ -101,6 +120,27 @@ void main() {
       expect(found, isNotEmpty);
       expect(found.first.type, PrinterType.network);
       expect(found.first.ip, '192.168.1.5');
+    });
+
+    test('discoverNetworkPrinters with requireConfirmation filters unconfirmed',
+        () async {
+      final repo = NetworkPrinterRepository(
+        interfaceLister: () async => [
+          _FakeNetworkInterface('en0', [_FakeInternetAddress('192.168.1.5')]),
+        ],
+        connector: (host, port, {timeout = const Duration(seconds: 5)}) async {
+          // Conecta mas o stream nunca responde => não confirmado.
+          if (host == '192.168.1.5') return buildSocket();
+          throw const SocketException('refused');
+        },
+      );
+
+      final found = await repo.discoverNetworkPrinters(
+        requireConfirmation: true,
+        onProgress: (_) {},
+      );
+
+      expect(found, isEmpty);
     });
 
     test('connect returns false when the IP is empty', () async {

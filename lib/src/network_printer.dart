@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:async';
 import 'dart:developer';
+import 'dart:typed_data';
 
 /// Abre uma conexão de socket TCP com [host]:[port].
 ///
@@ -154,6 +155,11 @@ class NetworkPrinter {
   ///
   /// [connector] e [interfaceLister] são seams de testabilidade
   /// (padrões: [Socket.connect] e [NetworkInterface.list]).
+  /// [requireConfirmation] quando `true`, retorna apenas impressoras
+  /// confirmadas via sonda ESC/POS (DLE EOT) na porta 9100. Por padrão
+  /// (`false`) mantém o comportamento original de retornar todos os
+  /// candidatos com porta aberta, cada um carregando o flag
+  /// [NetworkPrinterInfo.confirmed].
   static Future<List<NetworkPrinterInfo>> discoverPrinters({
     String? subnet,
     List<int> ports = const [9100, 515, 631],
@@ -161,6 +167,7 @@ class NetworkPrinter {
     Function(String)? onProgress,
     SocketConnector? connector,
     NetworkInterfaceLister? interfaceLister,
+    bool requireConfirmation = false,
   }) async {
     final socketConnector = connector ?? _defaultSocketConnector;
     final List<NetworkPrinterInfo> discoveredPrinters = [];
@@ -187,7 +194,7 @@ class NetworkPrinter {
       for (int i = 1; i <= 254; i++) {
         final ip = '$baseIp.$i';
         futures.add(_testPrinterAtIP(ip, ports, timeout, discoveredPrinters,
-            onProgress, socketConnector));
+            onProgress, socketConnector, requireConfirmation));
       }
 
       // Executa todos os testes em paralelo (em grupos para não sobrecarregar)
@@ -221,22 +228,39 @@ class NetworkPrinter {
     List<NetworkPrinterInfo> discoveredPrinters,
     Function(String)? onProgress,
     SocketConnector connector,
+    bool requireConfirmation,
   ) async {
     for (final port in ports) {
       try {
         final socket = await connector(ip, port, timeout: timeout);
-        await socket.close();
 
-        // Se conseguiu conectar, é uma possível impressora
+        // Na porta 9100 (ESC/POS raw) tentamos confirmar que o host é mesmo
+        // uma impressora enviando uma requisição de status em tempo real
+        // (DLE EOT 1) e aguardando qualquer resposta. Nas demais portas
+        // (515/631) a sonda raw não faz sentido, então não confirmamos.
+        bool confirmed = false;
+        if (port == 9100) {
+          confirmed = await _probeEscPos(socket, timeout);
+        } else {
+          await socket.close();
+        }
+
+        // Se requireConfirmation, descarta candidatos não confirmados.
+        if (requireConfirmation && !confirmed) {
+          continue;
+        }
+
         final printerInfo = NetworkPrinterInfo(
           ip: ip,
           port: port,
           name: 'Impressora de Rede ($ip:$port)',
           description: _getPortDescription(port),
+          confirmed: confirmed,
         );
 
         discoveredPrinters.add(printerInfo);
-        log('Impressora encontrada em $ip:$port', name: 'NETWORK_SCANNER');
+        log('Impressora encontrada em $ip:$port (confirmada: $confirmed)',
+            name: 'NETWORK_SCANNER');
         onProgress?.call('Impressora encontrada: $ip:$port');
 
         // Para em caso de sucesso para evitar duplicatas
@@ -244,6 +268,51 @@ class NetworkPrinter {
       } catch (e) {
         // Falha na conexão é esperada para a maioria dos IPs
         continue;
+      }
+    }
+  }
+
+  /// Envia a requisição de status em tempo real ESC/POS (DLE EOT 1) em
+  /// [socket] e aguarda até [timeout] por qualquer byte de resposta.
+  ///
+  /// Retorna `true` se algum byte for recebido (alta confiança de que o host
+  /// é uma impressora ESC/POS); `false` em caso de timeout ou erro no stream.
+  /// Sempre fecha o socket antes de retornar.
+  static Future<bool> _probeEscPos(Socket socket, Duration timeout) async {
+    final completer = Completer<bool>();
+    StreamSubscription<Uint8List>? subscription;
+
+    void finish(bool result) {
+      if (!completer.isCompleted) {
+        completer.complete(result);
+      }
+    }
+
+    try {
+      subscription = socket.listen(
+        (data) {
+          if (data.isNotEmpty) {
+            finish(true);
+          }
+        },
+        onError: (_) => finish(false),
+        onDone: () => finish(false),
+        cancelOnError: true,
+      );
+
+      // DLE EOT 1: requisição de status de impressora em tempo real.
+      socket.add(const [0x10, 0x04, 0x01]);
+      await socket.flush();
+
+      return await completer.future.timeout(timeout, onTimeout: () => false);
+    } catch (e) {
+      return false;
+    } finally {
+      await subscription?.cancel();
+      try {
+        await socket.close();
+      } catch (_) {
+        // Ignora erros ao fechar; o resultado da sonda já foi determinado.
       }
     }
   }
@@ -331,12 +400,18 @@ class NetworkPrinterInfo {
   /// Descrição do protocolo/porta detectada.
   final String description;
 
+  /// Indica se a impressora foi confirmada via sonda ESC/POS (DLE EOT) na
+  /// porta 9100. Para portas 515/631 (onde a sonda raw não se aplica) é
+  /// sempre `false`.
+  final bool confirmed;
+
   /// Cria um [NetworkPrinterInfo].
   NetworkPrinterInfo({
     required this.ip,
     required this.port,
     required this.name,
     required this.description,
+    this.confirmed = false,
   });
 
   @override

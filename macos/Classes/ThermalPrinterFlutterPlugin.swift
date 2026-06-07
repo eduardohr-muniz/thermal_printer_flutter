@@ -74,12 +74,6 @@ public class ThermalPrinterFlutterPlugin: NSObject, CBCentralManagerDelegate, CB
         case "writebytes":
             handleWritebytes(call: call, result: result)
 
-        case "printstring":
-            handlePrintstring(call: call, result: result)
-
-        case "printBytes":
-            handlePrintBytes(call: call, result: result)
-
         default:
             result(FlutterMethodNotImplemented)
         }
@@ -204,34 +198,6 @@ public class ThermalPrinterFlutterPlugin: NSObject, CBCentralManagerDelegate, CB
             writeChunked(data: data, characteristic: characteristic, useResponse: false)
             result(true)
         }
-    }
-
-    private func handlePrintstring(call: FlutterMethodCall, result: @escaping FlutterResult) {
-        guard let string = call.arguments as? String,
-              let characteristic = targetCharacteristic else {
-            result(false)
-            return
-        }
-        let data = Data(string.utf8)
-        let writeType: CBCharacteristicWriteType = characteristic.properties.contains(.write) ? .withResponse : .withoutResponse
-        connectedPeripheral?.writeValue(data, for: characteristic, type: writeType)
-        result(true)
-    }
-
-    private func handlePrintBytes(call: FlutterMethodCall, result: @escaping FlutterResult) {
-        guard let characteristic = targetCharacteristic,
-              let args = call.arguments as? [String: Any] else {
-            result(false)
-            return
-        }
-        let data = Self.dataFromBytesArgument(args["bytes"])
-        guard !data.isEmpty else {
-            result(false)
-            return
-        }
-        let writeType: CBCharacteristicWriteType = characteristic.properties.contains(.write) ? .withResponse : .withoutResponse
-        connectedPeripheral?.writeValue(data, for: characteristic, type: writeType)
-        result(true)
     }
 
     // MARK: - Helpers

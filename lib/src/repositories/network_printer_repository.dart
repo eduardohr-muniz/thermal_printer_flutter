@@ -26,8 +26,12 @@ class NetworkPrinterRepository implements PrinterRepository {
   }
 
   /// Descobre impressoras automaticamente na rede local
+  ///
+  /// [requireConfirmation] quando `true`, retorna apenas impressoras
+  /// confirmadas via sonda ESC/POS (porta 9100), reduzindo falsos positivos.
   Future<List<Printer>> discoverNetworkPrinters({
     Function(String)? onProgress,
+    bool requireConfirmation = false,
   }) async {
     try {
       log('Iniciando descoberta automática de impressoras na rede...', name: 'THERMAL_PRINTER_FLUTTER');
@@ -36,6 +40,7 @@ class NetworkPrinterRepository implements PrinterRepository {
         onProgress: onProgress,
         connector: _connector,
         interfaceLister: _interfaceLister,
+        requireConfirmation: requireConfirmation,
       );
 
       final printers = discoveredPrinters.map((printerInfo) {

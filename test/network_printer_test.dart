@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mocktail/mocktail.dart';
@@ -31,11 +33,35 @@ void main() {
     registerFallbackValue(<int>[]);
   });
 
-  _MockSocket buildSocket() {
+  // Constrói um mock de Socket cujo stream é alimentado por [controller].
+  // Quando [controller] é omitido, o stream nunca emite e nunca fecha, de modo
+  // que a sonda ESC/POS expira (não confirmado) sem bloquear indefinidamente.
+  _MockSocket buildSocket({StreamController<Uint8List>? controller}) {
     final socket = _MockSocket();
+    final stream =
+        controller?.stream ?? const Stream<Uint8List>.empty().asBroadcastStream();
     when(() => socket.add(any())).thenReturn(null);
     when(() => socket.flush()).thenAnswer((_) async {});
     when(() => socket.close()).thenAnswer((_) async {});
+    when(() => socket.listen(
+          any(),
+          onError: any(named: 'onError'),
+          onDone: any(named: 'onDone'),
+          cancelOnError: any(named: 'cancelOnError'),
+        )).thenAnswer((invocation) {
+      final onData =
+          invocation.positionalArguments[0] as void Function(Uint8List)?;
+      final onError = invocation.namedArguments[#onError] as Function?;
+      final onDone = invocation.namedArguments[#onDone] as void Function()?;
+      final cancelOnError =
+          invocation.namedArguments[#cancelOnError] as bool?;
+      return stream.listen(
+        onData,
+        onError: onError,
+        onDone: onDone,
+        cancelOnError: cancelOnError,
+      );
+    });
     return socket;
   }
 
@@ -368,6 +394,168 @@ void main() {
       expect((await discoverOnPort(631)).first.description, contains('IPP'));
       expect((await discoverOnPort(1234)).first.description, contains('1234'));
     });
+
+    test('confirms a printer that responds to the DLE EOT probe (9100)',
+        () async {
+      final controller = StreamController<Uint8List>();
+      final socket = buildSocket(controller: controller);
+      // Quando os bytes da sonda forem enviados, a impressora "responde".
+      when(() => socket.add(const [0x10, 0x04, 0x01])).thenAnswer((_) {
+        controller.add(Uint8List.fromList([0x16]));
+      });
+
+      final printers = await NetworkPrinter.discoverPrinters(
+        subnet: '192.168.1.0',
+        ports: const [9100],
+        connector: (host, port, {timeout = const Duration(seconds: 5)}) async {
+          if (host == '192.168.1.50') return socket;
+          throw const SocketException('refused');
+        },
+      );
+      await controller.close();
+
+      expect(printers, hasLength(1));
+      expect(printers.first.confirmed, isTrue);
+      verify(() => socket.close()).called(1);
+    });
+
+    test('leaves a non-responding 9100 host unconfirmed (low confidence)',
+        () async {
+      // O stream default nunca emite dados antes do timeout => não confirmado.
+      final printers = await NetworkPrinter.discoverPrinters(
+        subnet: '192.168.1.0',
+        ports: const [9100],
+        timeout: const Duration(milliseconds: 50),
+        connector: (host, port, {timeout = const Duration(seconds: 5)}) async {
+          if (host == '192.168.1.50') {
+            // Stream que nunca emite e nunca fecha => força o timeout da sonda.
+            return buildSocket(controller: StreamController<Uint8List>());
+          }
+          throw const SocketException('refused');
+        },
+      );
+
+      expect(printers, hasLength(1));
+      expect(printers.first.confirmed, isFalse);
+    });
+
+    test('treats a stream error during the probe as unconfirmed', () async {
+      final controller = StreamController<Uint8List>();
+      final socket = buildSocket(controller: controller);
+      when(() => socket.add(const [0x10, 0x04, 0x01])).thenAnswer((_) {
+        controller.addError(const SocketException('reset'));
+      });
+
+      final printers = await NetworkPrinter.discoverPrinters(
+        subnet: '192.168.1.0',
+        ports: const [9100],
+        connector: (host, port, {timeout = const Duration(seconds: 5)}) async {
+          if (host == '192.168.1.50') return socket;
+          throw const SocketException('refused');
+        },
+      );
+      await controller.close();
+
+      expect(printers, hasLength(1));
+      expect(printers.first.confirmed, isFalse);
+    });
+
+    test('requireConfirmation:true filters out unconfirmed candidates',
+        () async {
+      final printers = await NetworkPrinter.discoverPrinters(
+        subnet: '192.168.1.0',
+        ports: const [9100],
+        timeout: const Duration(milliseconds: 50),
+        requireConfirmation: true,
+        connector: (host, port, {timeout = const Duration(seconds: 5)}) async {
+          if (host == '192.168.1.50') {
+            return buildSocket(controller: StreamController<Uint8List>());
+          }
+          throw const SocketException('refused');
+        },
+      );
+
+      expect(printers, isEmpty);
+    });
+
+    test('requireConfirmation:true keeps confirmed printers', () async {
+      final controller = StreamController<Uint8List>();
+      final socket = buildSocket(controller: controller);
+      when(() => socket.add(const [0x10, 0x04, 0x01])).thenAnswer((_) {
+        controller.add(Uint8List.fromList([0x16]));
+      });
+
+      final printers = await NetworkPrinter.discoverPrinters(
+        subnet: '192.168.1.0',
+        ports: const [9100],
+        requireConfirmation: true,
+        connector: (host, port, {timeout = const Duration(seconds: 5)}) async {
+          if (host == '192.168.1.50') return socket;
+          throw const SocketException('refused');
+        },
+      );
+      await controller.close();
+
+      expect(printers, hasLength(1));
+      expect(printers.first.confirmed, isTrue);
+    });
+
+    test('non-9100 ports (515/631) are never confirmed', () async {
+      Future<NetworkPrinterInfo> discoverOnPort(int port) async {
+        final result = await NetworkPrinter.discoverPrinters(
+          subnet: '192.168.1.0',
+          ports: [port],
+          connector: (host, p, {timeout = const Duration(seconds: 5)}) async {
+            if (host == '192.168.1.1') return buildSocket();
+            throw const SocketException('refused');
+          },
+        );
+        return result.first;
+      }
+
+      expect((await discoverOnPort(515)).confirmed, isFalse);
+      expect((await discoverOnPort(631)).confirmed, isFalse);
+    });
+
+    test('handles an error thrown while closing after the probe', () async {
+      final controller = StreamController<Uint8List>();
+      final socket = buildSocket(controller: controller);
+      when(() => socket.add(const [0x10, 0x04, 0x01])).thenAnswer((_) {
+        controller.add(Uint8List.fromList([0x16]));
+      });
+      when(() => socket.close())
+          .thenThrow(const SocketException('close fail'));
+
+      final printers = await NetworkPrinter.discoverPrinters(
+        subnet: '192.168.1.0',
+        ports: const [9100],
+        connector: (host, port, {timeout = const Duration(seconds: 5)}) async {
+          if (host == '192.168.1.50') return socket;
+          throw const SocketException('refused');
+        },
+      );
+      await controller.close();
+
+      expect(printers, hasLength(1));
+      expect(printers.first.confirmed, isTrue);
+    });
+
+    test('treats a probe flush failure as unconfirmed', () async {
+      final socket = buildSocket(controller: StreamController<Uint8List>());
+      when(() => socket.flush()).thenThrow(const SocketException('flush'));
+
+      final printers = await NetworkPrinter.discoverPrinters(
+        subnet: '192.168.1.0',
+        ports: const [9100],
+        connector: (host, port, {timeout = const Duration(seconds: 5)}) async {
+          if (host == '192.168.1.50') return socket;
+          throw const SocketException('refused');
+        },
+      );
+
+      expect(printers, hasLength(1));
+      expect(printers.first.confirmed, isFalse);
+    });
   });
 
   group('NetworkPrinterInfo', () {
@@ -380,6 +568,19 @@ void main() {
       );
 
       expect(info.toString(), 'Printer - 1.2.3.4:9100 (Raw)');
+      expect(info.confirmed, isFalse);
+    });
+
+    test('confirmed defaults to false and can be set to true', () {
+      final info = NetworkPrinterInfo(
+        ip: '1.2.3.4',
+        port: 9100,
+        name: 'Printer',
+        description: 'Raw',
+        confirmed: true,
+      );
+
+      expect(info.confirmed, isTrue);
     });
   });
 }

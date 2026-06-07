@@ -95,12 +95,17 @@ class ThermalPrinterFlutter implements ThermalPrinterFlutterPlatform {
   ///
   /// [onProgress] - Callback opcional para receber atualizações do progresso
   ///
+  /// [requireConfirmation] - Quando `true`, retorna apenas impressoras
+  /// confirmadas via sonda ESC/POS (porta 9100), reduzindo falsos positivos
+  /// (ex.: hosts com CUPS na 631 ou outros serviços na 9100).
+  ///
   /// Retorna uma lista de impressoras encontradas na rede
   Future<List<Printer>> discoverNetworkPrinters({
     Function(String)? onProgress,
+    bool requireConfirmation = false,
   }) async {
     return await _networkRepository.discoverNetworkPrinters(
-        onProgress: onProgress);
+        onProgress: onProgress, requireConfirmation: requireConfirmation);
   }
 
   /// Envia [bytes] (ESC/POS) para a [printer].

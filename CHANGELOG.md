@@ -18,6 +18,8 @@
 - USB `isConnected` now returns `true` (connectionless model) instead of relying on an unimplemented/meaningless channel call; use `getPrinterStatus` for real USB health.
 - Documented the `writebytes` wire contract (USB sends a `Map`, Bluetooth sends raw bytes — this is how macOS routes USB-via-CUPS vs BLE) and locked it with tests.
 - Documented platform/feature limitations in the README (status, isConnected, single BLE connection, discovery false positives).
+- Network discovery can now confirm a candidate is a real printer via an ESC/POS `DLE EOT` probe on port 9100: `NetworkPrinterInfo.confirmed` flags the result, and `discoverNetworkPrinters(requireConfirmation: true)` returns only confirmed printers (default `false` keeps the previous candidate-listing behavior).
+- Removed dead `printstring`/`printBytes` method handlers from the iOS/macOS plugins (never invoked from Dart).
 - Added unit test coverage (100% of the Dart library).
 
 ## 0.0.1+6
