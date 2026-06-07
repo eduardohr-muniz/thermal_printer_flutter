@@ -1,8 +1,8 @@
-# THERMAL PRINTER FLUTTER
+# thermal_printer_flutter
 
-Flutter plugin for thermal printing with support for multiple platforms and connection types.
+Flutter plugin for ESC/POS thermal printing over **USB**, **Bluetooth (BLE)** and **Network (TCP/IP)** on Android, iOS, macOS, Windows, Linux and Web.
 
-## Support
+## Platform support
 
 | Platform | USB | Bluetooth | Network |
 | -------- | --- | --------- | ------- |
@@ -13,27 +13,21 @@ Flutter plugin for thermal printing with support for multiple platforms and conn
 | Linux    | ❌  | ❌        | ✅      |
 | Web      | ❌  | ❌        | 🚧      |
 
-> **Notes / known limitations**
-> - `getPrinterStatus` returns real data for **USB printers on Windows** (queried from the spooler) and **macOS** (queried from CUPS). For Bluetooth/Network it returns `PrinterStatus.unknown`.
-> - `isConnected` for USB always returns `true`: USB/spooler printers are connectionless in this plugin (`connect()` is a no-op). Use `getPrinterStatus` to check whether a Windows USB printer is actually online/out of paper.
-> - Bluetooth currently manages a **single active connection**; `disconnect()` closes the active connection regardless of which `Printer` is passed.
-> - Automatic network discovery flags **any host** with an open printer port (9100/515/631) as a printer, so it may report non-printers (e.g. desktops running CUPS on 631). Treat results as candidates.
+## Install
 
-## Features
+```yaml
+dependencies:
+  thermal_printer_flutter: ^0.1.0
+```
 
-- **Multiple Connection Types**: Support for USB, Bluetooth, and Network printers
-- **Cross-Platform**: Works on Android, iOS, macOS, Windows, and Linux
-- **Automatic Network Discovery**: Automatically discover network printers on your local network
-- **Manual Network Configuration**: Add network printers manually with IP and port
-- **Real-time Progress**: Get progress updates during network discovery
-- **ESC/POS Compatible**: Full support for ESC/POS thermal printer commands
-- **Image Printing**: Print images and widgets directly to thermal printers
+```dart
+import 'package:thermal_printer_flutter/thermal_printer_flutter.dart';
+```
 
-## Project Setup
+## Permissions & setup per platform
 
 ### Android
-
-1. Add the following permissions to the `android/app/src/main/AndroidManifest.xml` file:
+Add to `android/app/src/main/AndroidManifest.xml`:
 
 ```xml
 <uses-permission android:name="android.permission.BLUETOOTH" />
@@ -45,15 +39,14 @@ Flutter plugin for thermal printing with support for multiple platforms and conn
 <uses-permission android:name="android.permission.INTERNET" />
 ```
 
-2. For Android 12 or higher, also add:
+Android 12+ also needs:
 
 ```xml
 <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
 ```
 
 ### iOS
-
-1. Add the following keys to the `ios/Runner/Info.plist` file:
+Add to `ios/Runner/Info.plist`:
 
 ```xml
 <key>NSBluetoothAlwaysUsageDescription</key>
@@ -62,7 +55,7 @@ Flutter plugin for thermal printing with support for multiple platforms and conn
 <string>We need Bluetooth access to connect to thermal printers</string>
 ```
 
-2. For iOS 13 or higher, also add:
+iOS 13+ also needs:
 
 ```xml
 <key>NSBluetoothAlwaysAndWhenInUseUsageDescription</key>
@@ -70,8 +63,7 @@ Flutter plugin for thermal printing with support for multiple platforms and conn
 ```
 
 ### macOS
-
-1. Add the following keys to the `macos/Runner/Info.plist` file:
+Add the Bluetooth keys to `macos/Runner/Info.plist`:
 
 ```xml
 <key>NSBluetoothAlwaysUsageDescription</key>
@@ -80,239 +72,118 @@ Flutter plugin for thermal printing with support for multiple platforms and conn
 <string>We need Bluetooth access to connect to thermal printers</string>
 ```
 
-2. Add the following keys to the `macos/Runner/DebugProfile.entitlements` file:
+Add the entitlements to **both** `macos/Runner/DebugProfile.entitlements` and `macos/Runner/Release.entitlements`:
 
 ```xml
-<!-- Bluetooth printers -->
 <key>com.apple.security.device.bluetooth</key>
 <true/>
-<!-- USB printers (printing goes through the system print queue / CUPS) -->
 <key>com.apple.security.print</key>
 <true/>
 ```
 
-3. Add the following keys to the `macos/Runner/Release.entitlements` file:
-
-```xml
-<!-- Bluetooth printers -->
-<key>com.apple.security.device.bluetooth</key>
-<true/>
-<!-- USB printers (printing goes through the system print queue / CUPS) -->
-<key>com.apple.security.print</key>
-<true/>
-```
-
-> **USB printing on macOS:** Unlike Windows (which talks to the USB device
-> directly), macOS routes USB printing through the system print queue (CUPS).
-> The printer must first be added in **System Settings > Printers & Scanners**
-> (connect it over USB, then add it — choosing the *Generic* driver works well
-> for most ESC/POS thermal printers). `getPrinters(printerType: PrinterType.usb)`
-> then lists the installed queues, and printing sends the raw ESC/POS bytes
-> straight to the selected queue.
+> **USB on macOS** goes through the system print queue (CUPS), not raw USB.
+> Add the printer in **System Settings → Printers & Scanners** first (the
+> *Generic* driver works for most ESC/POS printers). `getPrinters(printerType: PrinterType.usb)`
+> then lists the installed queues.
 
 ### Windows
-
-1. For USB printers, ensure the printer drivers are installed.
-2. For Bluetooth printers, Windows must support Bluetooth LE (Bluetooth 4.0 or higher).
+No manifest permissions required. Install the USB printer driver so it shows up in the Windows print spooler. (Bluetooth is not supported on Windows.)
 
 ### Linux
-
-1. For network printers, ensure that the firewall allows connections on port 9100 (or the configured port).
+Network only — make sure the firewall allows the printer port (default `9100`).
 
 ### Web
-
-1. For network printers, ensure that the web server allows WebSocket connections.
-2. Add the following script to the `web/index.html` file:
-
-```html
-<script>
-  if ("serviceWorker" in navigator) {
-    window.addEventListener("flutter-first-frame", function () {
-      navigator.serviceWorker.register("flutter_service_worker.js");
-    });
-  }
-</script>
-```
+Experimental. Network printing requires a server/proxy that accepts the connection (raw TCP sockets aren't available in the browser).
 
 ## Usage
 
-### Basic Setup
-
 ```dart
-import 'package:thermal_printer_flutter/thermal_printer_flutter.dart';
-
-// Create an instance of the plugin
-final thermalPrinter = ThermalPrinterFlutter();
-Printer? _selectedPrinter;
+final printer = ThermalPrinterFlutter();
 ```
 
-### Getting Printers
+### List printers
 
 ```dart
-// Bluetooth printers (Android, iOS, macOS)
-final bluetoothPrinters = await thermalPrinter.getPrinters(printerType: PrinterType.bluetooth);
-
-// USB printers (Windows, macOS)
-// On macOS the printer must be added in System Settings > Printers & Scanners.
-final usbPrinters = await thermalPrinter.getPrinters(printerType: PrinterType.usb);
-
-// Network printers - Manual addition only
-// Use the discovery method below for automatic detection
+final usb       = await printer.getPrinters(printerType: PrinterType.usb);       // Windows, macOS
+final bluetooth = await printer.getPrinters(printerType: PrinterType.bluetooth); // Android, iOS, macOS
 ```
 
-### 🔍 Network Printer Discovery (NEW!)
-
-Automatically discover network printers on your local network:
+### Discover network printers
 
 ```dart
-// Discover printers automatically
-final networkPrinters = await thermalPrinter.discoverNetworkPrinters(
-  onProgress: (progress) {
-    print('Discovery progress: $progress');
-  },
-);
-
-// The discovery scans common printer ports:
-// - 9100 (Raw TCP/IP - most common for thermal printers)
-// - 515 (LPR/LPD)
-// - 631 (IPP - Internet Printing Protocol)
-```
-
-### Manual Network Printer Addition
-
-```dart
-// Add a network printer manually
-final networkPrinter = Printer(
-  type: PrinterType.network,
-  name: 'My Network Printer',
-  ip: '192.168.1.100',
-  port: '9100',
+final found = await printer.discoverNetworkPrinters(
+  onProgress: (p) => print(p),
+  requireConfirmation: true, // optional: probe port 9100 (ESC/POS) to drop false positives
 );
 ```
 
-### Connecting to Printers
+Or add one manually:
 
 ```dart
-// Connect to any printer (Bluetooth or Network)
-final connected = await thermalPrinter.connect(printer: selectedPrinter);
-
-// Check connection status
-final isConnected = await thermalPrinter.isConnected(printer: selectedPrinter);
-
-// Disconnect from printer
-await thermalPrinter.disconnect(printer: selectedPrinter);
+final p = Printer(type: PrinterType.network, name: 'Kitchen', ip: '192.168.1.50', port: '9100');
 ```
 
-### Printing
+### Connect (Bluetooth / Network)
 
 ```dart
-Future<void> _printTest({
-  required ThermalPrinterFlutter termalPrinter,  
-  required Printer printer
-}) async {
-  try {
-    final generator = Generator(PaperSize.mm80, await CapabilityProfile.load());
-    List<int> bytes = [];
-
-    bytes += generator.text('Print Test',
-        styles: const PosStyles(
-          align: PosAlign.center,
-          bold: true,
-          height: PosTextSize.size2,
-          width: PosTextSize.size2,
-        ));
-    bytes += generator.feed(2);
-    bytes += generator.text('Date: ${DateTime.now()}');
-    bytes += generator.feed(2);
-    bytes += generator.text('This is a test print');
-    bytes += generator.feed(2);
-    bytes += generator.cut();
-
-    await termalPrinter.printBytes(bytes: bytes, printer: printer);
-
-  } catch (e) {
-    print('Error printing: $e');
-  }
-}
+await printer.connect(printer: target);
+await printer.disconnect(printer: target);
 ```
+> USB printers are connectionless — no `connect()` needed.
 
-### Image and Widget Printing
+### Print
 
 ```dart
-// Print a Flutter widget as an image
-final image = await thermalPrinter.screenShotWidget(
-  context,
-  widget: MyCustomWidget(),
-  pixelRatio: 3.0,
-);
-
-// Convert to thermal printer format
 final generator = Generator(PaperSize.mm80, await CapabilityProfile.load());
-List<int> bytes = [];
-bytes += generator.imageRaster(image);
-bytes += generator.cut();
+final bytes = <int>[]
+  ..addAll(generator.text('Hello', styles: const PosStyles(align: PosAlign.center, bold: true)))
+  ..addAll(generator.feed(2))
+  ..addAll(generator.cut());
 
-await thermalPrinter.printBytes(bytes: bytes, printer: printer);
+await printer.printBytes(bytes: bytes, printer: target);
+
+// Multiple copies in a single job (do not call printBytes in a loop):
+await printer.printBytes(bytes: bytes, printer: target, copies: 2);
 ```
 
-### Printing multiple copies
-
-Use the `copies` parameter instead of calling `printBytes` in a loop. The
-payload is repeated inside a **single** job, so the behaviour is identical on
-every platform and does not depend on the printer driver's "Copies" setting
-(on Windows that setting is forced to `1`):
+### Print a widget / image
 
 ```dart
-// Prints the same receipt 3 times in one job.
-await thermalPrinter.printBytes(bytes: bytes, printer: printer, copies: 3);
+final image = await printer.screenShotWidget(
+  context,
+  widget: MyReceipt(),
+  width: 576,   // 80 mm @ 203 dpi (use 384 for 58 mm)
+  pixelRatio: 4.0,
+  dither: true, // Floyd–Steinberg (default) — best for logos/photos
+);
+
+final bytes = <int>[]
+  ..addAll(generator.imageRaster(image))
+  ..addAll(generator.cut());
+
+await printer.printBytes(bytes: bytes, printer: target);
 ```
 
-Each copy repeats `bytes` exactly, so make sure your payload ends with the
-desired cut/feed (e.g. `generator.cut()`). Concurrent `printBytes` calls are
-serialized internally, so jobs never overlap even if you do call it in a loop.
+### Printer status (USB)
 
-## Network Discovery Details
-
-The automatic network discovery feature:
-
-- **Automatically detects your local network** (Wi-Fi/Ethernet)
-- **Scans all IP addresses** in your subnet (e.g., 192.168.1.1 to 192.168.1.254)
-- **Tests multiple ports** commonly used by thermal printers
-- **Provides real-time progress** updates during scanning
-- **Works on all platforms** that support network printing
-
-### Supported Network Protocols
-
-| Port | Protocol | Description |
-|------|----------|-------------|
-| 9100 | Raw TCP/IP | Most common for thermal printers |
-| 515  | LPR/LPD | Line Printer Remote/Line Printer Daemon |
-| 631  | IPP | Internet Printing Protocol |
-
-## Dependency Compatibility
-
-If you are using the packages below, we recommend using these specific versions for better compatibility:
-
-```yaml
-dependencies:
-  web: ^0.5.1
-  image: ^4.5.4
+```dart
+final status = await printer.getPrinterStatus(printer: target);
+print('${status.description} (paperOut=${status.isPaperOut}, offline=${status.isOffline})');
 ```
 
-## Example
+### Release resources
 
-Check out the complete example at `example/lib/main.dart` for a sample implementation with a graphical interface including:
+```dart
+await printer.dispose(); // closes pooled network sockets
+```
 
-- Automatic network printer discovery
-- Manual network printer addition
-- Bluetooth printer connectivity
-- Real-time connection status
-- Test printing functionality
+## Notes & limitations
 
-## Contribution
-
-Contributions are welcome! Feel free to open issues or submit pull requests.
+- `getPrinterStatus` returns real data only for **USB** printers on **Windows** (spooler) and **macOS** (CUPS); otherwise `PrinterStatus.unknown`.
+- `isConnected` is always `true` for USB (connectionless) — use `getPrinterStatus` for real health.
+- Bluetooth manages a **single active connection**; `disconnect()` closes the active one regardless of the `Printer` passed.
+- Network discovery flags **any host** with an open port (9100/515/631) as a candidate — use `requireConfirmation: true` to reduce false positives.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT — see [LICENSE](LICENSE).
