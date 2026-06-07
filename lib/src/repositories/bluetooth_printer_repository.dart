@@ -9,11 +9,12 @@ class BluetoothPrinterRepository implements PrinterRepository {
   @override
   Future<List<Printer>> getPrinters() async {
     try {
-      final List<dynamic> devices = await _channel.invokeMethod<List<dynamic>>('pairedbluetooths') ?? [];
+      final List<dynamic> devices =
+          await _channel.invokeMethod<List<dynamic>>('pairedbluetooths') ?? [];
       return devices.map((device) {
         if (device is Map) {
           return Printer(
-            type: PrinterType.bluethoot,
+            type: PrinterType.bluetooth,
             name: device['name'] ?? '',
             bleAddress: device['bleAddress'] ?? '',
             isConnected: device['isConnected'] ?? false,
@@ -21,17 +22,18 @@ class BluetoothPrinterRepository implements PrinterRepository {
         } else if (device is String) {
           final parts = device.split('#');
           return Printer(
-            type: PrinterType.bluethoot,
+            type: PrinterType.bluetooth,
             name: parts[0],
             bleAddress: parts[1],
           );
         }
         return Printer(
-          type: PrinterType.bluethoot,
+          type: PrinterType.bluetooth,
         );
       }).toList();
     } catch (e) {
-      log('Erro ao obter impressoras Bluetooth: $e', name: 'THERMAL_PRINTER_FLUTTER');
+      log('Erro ao obter impressoras Bluetooth: $e',
+          name: 'THERMAL_PRINTER_FLUTTER');
       return [];
     }
   }
@@ -46,10 +48,13 @@ class BluetoothPrinterRepository implements PrinterRepository {
       await Future.delayed(const Duration(milliseconds: 500));
 
       // Tenta conectar
-      final bool result = await _channel.invokeMethod<bool>('connect', printer.bleAddress) ?? false;
+      final bool result =
+          await _channel.invokeMethod<bool>('connect', printer.bleAddress) ??
+              false;
       return result;
     } catch (e) {
-      log('Erro ao conectar impressora Bluetooth: $e', name: 'THERMAL_PRINTER_FLUTTER');
+      log('Erro ao conectar impressora Bluetooth: $e',
+          name: 'THERMAL_PRINTER_FLUTTER');
       return false;
     }
   }
@@ -59,14 +64,16 @@ class BluetoothPrinterRepository implements PrinterRepository {
     try {
       await _channel.invokeMethod('disconnect');
     } catch (e) {
-      log('Erro ao desconectar impressora Bluetooth: $e', name: 'THERMAL_PRINTER_FLUTTER');
+      log('Erro ao desconectar impressora Bluetooth: $e',
+          name: 'THERMAL_PRINTER_FLUTTER');
     }
   }
 
   @override
-  Future<void> printBytes({required List<int> bytes, required Printer printer}) async {
+  Future<void> printBytes(
+      {required List<int> bytes, required Printer printer}) async {
     try {
-      await _channel.invokeMethod('writebytes', bytes);
+      await _channel.invokeMethod('writebytes', Uint8List.fromList(bytes));
     } catch (e) {
       log('Erro ao imprimir bytes: $e', name: 'THERMAL_PRINTER_FLUTTER');
       rethrow;
@@ -76,10 +83,13 @@ class BluetoothPrinterRepository implements PrinterRepository {
   @override
   Future<bool> isConnected(Printer printer) async {
     try {
-      final bool result = await _channel.invokeMethod<bool>('isConnected', printer.bleAddress) ?? false;
+      final bool result = await _channel.invokeMethod<bool>(
+              'isConnected', printer.bleAddress) ??
+          false;
       return result;
     } catch (e) {
-      log('Erro ao verificar conexão Bluetooth: $e', name: 'THERMAL_PRINTER_FLUTTER');
+      log('Erro ao verificar conexão Bluetooth: $e',
+          name: 'THERMAL_PRINTER_FLUTTER');
       return false;
     }
   }

@@ -1,3 +1,7 @@
+// coverage:ignore-file
+// Web implementation relies on dart:web/browser APIs that do not run in the
+// Flutter test VM, so it is excluded from unit-test coverage.
+//
 // In order to *not* need this ignore, consider extracting the "web" version
 // of your plugin as a separate package, instead of inlining it in the same
 // package as the core of your plugin.

@@ -1,25 +1,28 @@
 #include "thermal_printer_flutter_plugin.h"
 
-// Inclusões necessárias para o Windows
+// Windows system headers
 #include <windows.h>
 #include <winspool.h>
 #include <VersionHelpers.h>
 
-// Inclusões do Flutter
+// Flutter headers
 #include <flutter/method_channel.h>
 #include <flutter/plugin_registrar_windows.h>
 #include <flutter/standard_method_codec.h>
+#include <flutter/encodable_value.h>
 
 #include <memory>
+#include <optional>
 #include <sstream>
-#include <vector>
 #include <string>
+#include <vector>
 
 namespace thermal_printer_flutter {
 
-// =====================================================
-// Método original do plugin para registrar o canal
-// =====================================================
+// ─────────────────────────────────────────────
+// Plugin registration
+// ─────────────────────────────────────────────
+
 void ThermalPrinterFlutterPlugin::RegisterWithRegistrar(
     flutter::PluginRegistrarWindows *registrar) {
   auto channel =
@@ -37,104 +40,195 @@ void ThermalPrinterFlutterPlugin::RegisterWithRegistrar(
   registrar->AddPlugin(std::move(plugin));
 }
 
-// =====================================================
-// Construtor e destrutor padrão
-// =====================================================
+// ─────────────────────────────────────────────
+// Constructor / destructor
+// ─────────────────────────────────────────────
+
 ThermalPrinterFlutterPlugin::ThermalPrinterFlutterPlugin() {}
 ThermalPrinterFlutterPlugin::~ThermalPrinterFlutterPlugin() {}
 
-// =====================================================
-// Método auxiliar para converter string wide para string normal
-// =====================================================
-std::string WideStringToString(LPCWSTR wideStr) {
+// ─────────────────────────────────────────────
+// Helper: UTF-8 -> wide string (safe, no raw new[])
+// ─────────────────────────────────────────────
+
+// static
+std::wstring ThermalPrinterFlutterPlugin::StringToWideString(
+    const std::string& utf8) {
+  if (utf8.empty()) return std::wstring();
+
+  int needed = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, nullptr, 0);
+  if (needed <= 0) return std::wstring();
+
+  std::wstring wide(static_cast<size_t>(needed), L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, &wide[0], needed);
+
+  // MultiByteToWideChar with -1 includes the terminating null in `needed`;
+  // std::wstring already owns the storage, so strip the embedded null.
+  if (!wide.empty() && wide.back() == L'\0') {
+    wide.pop_back();
+  }
+  return wide;
+}
+
+// ─────────────────────────────────────────────
+// Helper: wide string -> UTF-8 (free function, used by GetPrinters)
+// ─────────────────────────────────────────────
+
+static std::string WideStringToString(LPCWSTR wideStr) {
   if (wideStr == nullptr) return std::string();
-  
-  int size_needed = WideCharToMultiByte(CP_UTF8, 0, wideStr, -1, nullptr, 0, nullptr, nullptr);
-  if (size_needed == 0) return std::string();
-  
-  std::string result(size_needed, '\0');
-  WideCharToMultiByte(CP_UTF8, 0, wideStr, -1, &result[0], size_needed, nullptr, nullptr);
-  
-  // Remove o caractere nulo final
+
+  int needed = WideCharToMultiByte(CP_UTF8, 0, wideStr, -1,
+                                   nullptr, 0, nullptr, nullptr);
+  if (needed <= 0) return std::string();
+
+  std::string result(static_cast<size_t>(needed), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, wideStr, -1,
+                      &result[0], needed, nullptr, nullptr);
+
   if (!result.empty() && result.back() == '\0') {
     result.pop_back();
   }
-  
   return result;
 }
 
-// =====================================================
-// Método para obter lista de impressoras disponíveis
-// =====================================================
+// ─────────────────────────────────────────────
+// Helper: extract byte payload from an EncodableValue.
+// Prefers FlutterStandardTypedData (vector<uint8_t>); falls back to
+// EncodableList of int32_t for callers that still send List<int>.
+// ─────────────────────────────────────────────
+
+// static
+std::optional<std::vector<uint8_t>> ThermalPrinterFlutterPlugin::ExtractBytes(
+    const flutter::EncodableValue& value) {
+
+  // Primary path: Dart Uint8List -> FlutterStandardTypedData -> vector<uint8_t>
+  if (const auto* typed = std::get_if<std::vector<uint8_t>>(&value)) {
+    return *typed;
+  }
+
+  // Legacy fallback: Dart List<int> -> EncodableList of int32_t
+  if (const auto* list = std::get_if<flutter::EncodableList>(&value)) {
+    std::vector<uint8_t> bytes;
+    bytes.reserve(list->size());
+    for (const auto& item : *list) {
+      if (const auto* iv = std::get_if<int32_t>(&item)) {
+        bytes.push_back(static_cast<uint8_t>(*iv));
+      } else {
+        // Malformed list element — abort
+        return std::nullopt;
+      }
+    }
+    return bytes;
+  }
+
+  return std::nullopt;
+}
+
+// ─────────────────────────────────────────────
+// GetPrinters — enumerate local + connected printers
+// ─────────────────────────────────────────────
+
 std::vector<std::string> ThermalPrinterFlutterPlugin::GetPrinters() {
   std::vector<std::string> printers;
   DWORD needed = 0;
   DWORD returned = 0;
-  
-  // Primeiro chamada para obter o tamanho necessário
-  EnumPrinters(PRINTER_ENUM_LOCAL | PRINTER_ENUM_CONNECTIONS, NULL, 2, NULL, 0, &needed, &returned);
-  
-  if (needed > 0) {
-    std::vector<BYTE> buffer(needed);
-    if (EnumPrinters(PRINTER_ENUM_LOCAL | PRINTER_ENUM_CONNECTIONS, NULL, 2, buffer.data(), needed, &needed, &returned)) {
-      PRINTER_INFO_2* printerInfo = reinterpret_cast<PRINTER_INFO_2*>(buffer.data());
-      for (DWORD i = 0; i < returned; i++) {
-        printers.push_back(WideStringToString(printerInfo[i].pPrinterName));
-      }
-    }
+
+  // First call: determine required buffer size
+  EnumPrinters(PRINTER_ENUM_LOCAL | PRINTER_ENUM_CONNECTIONS,
+               NULL, 2, NULL, 0, &needed, &returned);
+
+  if (needed == 0) return printers;
+
+  std::vector<BYTE> buffer(needed);
+  if (!EnumPrinters(PRINTER_ENUM_LOCAL | PRINTER_ENUM_CONNECTIONS,
+                    NULL, 2, buffer.data(), needed, &needed, &returned)) {
+    return printers;
   }
-  
+
+  auto* info = reinterpret_cast<PRINTER_INFO_2*>(buffer.data());
+  printers.reserve(returned);
+  for (DWORD i = 0; i < returned; ++i) {
+    printers.push_back(WideStringToString(info[i].pPrinterName));
+  }
   return printers;
 }
 
-// =====================================================
-// Método principal para imprimir bytes na impressora
-// Implementação baseada no exemplo do win32
-// =====================================================
-void ThermalPrinterFlutterPlugin::PrintBytes(const std::vector<uint8_t>& bytes, const std::string& printerName) {
-    HANDLE hPrinter;
-    DOC_INFO_1 docInfo = { 0 };
-    DWORD bytesWritten;
+// ─────────────────────────────────────────────
+// PrintBytes — send raw ESC/POS bytes to the Windows spooler
+//
+// Flow:
+//   1. OpenPrinter
+//   2. StartDocPrinter  (datatype = L"RAW" — prevents driver re-rendering)
+//   3. StartPagePrinter
+//   4. WritePrinter in a loop (handles partial writes)
+//   5. EndPagePrinter / EndDocPrinter / ClosePrinter
+//
+// Every Win32 call is checked; on failure we clean up and return false.
+// ─────────────────────────────────────────────
 
-    // Converte o nome da impressora para string wide (Unicode)
-    // Necessário porque o Windows usa strings Unicode internamente
-    int wchars_num = MultiByteToWideChar(CP_UTF8, 0, printerName.c_str(), -1, NULL, 0);
-    wchar_t* wstr = new wchar_t[wchars_num];
-    MultiByteToWideChar(CP_UTF8, 0, printerName.c_str(), -1, wstr, wchars_num);
+bool ThermalPrinterFlutterPlugin::PrintBytes(const std::vector<uint8_t>& bytes,
+                                             const std::string& printerName) {
+  if (bytes.empty()) return false;
 
-    // Converte o nome do documento para string wide
-    const char* docName = "ESC/POS Print Job";
-    int doc_wchars_num = MultiByteToWideChar(CP_UTF8, 0, docName, -1, NULL, 0);
-    wchar_t* doc_wstr = new wchar_t[doc_wchars_num];
-    MultiByteToWideChar(CP_UTF8, 0, docName, -1, doc_wstr, doc_wchars_num);
+  const std::wstring wPrinterName = StringToWideString(printerName);
+  const std::wstring wDocName     = L"ESC/POS Print Job";
 
-    // Configura as informações do documento
-    docInfo.pDocName = doc_wstr;
-    docInfo.pOutputFile = NULL;
-    docInfo.pDatatype = NULL;
+  HANDLE hPrinter = nullptr;
+  if (!OpenPrinter(const_cast<LPWSTR>(wPrinterName.c_str()),
+                   &hPrinter, nullptr)) {
+    return false;
+  }
 
-    // Abre a impressora
-    if (OpenPrinter(wstr, &hPrinter, NULL)) {
-        // Inicia o documento
-        if (StartDocPrinter(hPrinter, 1, (LPBYTE)&docInfo)) {
-            // Inicia a página
-            StartPagePrinter(hPrinter);
-            
-            // Escreve os bytes na impressora
-            // Cast explícito necessário para os tipos esperados pela API do Windows
-            WritePrinter(hPrinter, (LPVOID)bytes.data(), (DWORD)bytes.size(), &bytesWritten);
-            
-            // Finaliza a página e o documento
-            EndPagePrinter(hPrinter);
-            EndDocPrinter(hPrinter);
-        }
-        // Fecha a impressora
-        ClosePrinter(hPrinter);
+  // RAII-style guard: always close the printer handle on scope exit
+  struct PrinterGuard {
+    HANDLE h;
+    bool   docStarted  = false;
+    bool   pageStarted = false;
+    ~PrinterGuard() {
+      if (pageStarted) EndPagePrinter(h);
+      if (docStarted)  EndDocPrinter(h);
+      ClosePrinter(h);
     }
+  } guard{ hPrinter };
 
-    // Limpa a memória alocada
-    delete[] wstr;
-    delete[] doc_wstr;
+  // Force RAW datatype so the driver passes bytes straight through
+  // without re-rendering, which is the root cause of "prints multiple copies".
+  DOC_INFO_1 docInfo{};
+  docInfo.pDocName    = const_cast<LPWSTR>(wDocName.c_str());
+  docInfo.pOutputFile = nullptr;
+  docInfo.pDatatype   = const_cast<LPWSTR>(L"RAW");
+
+  DWORD jobId = StartDocPrinter(hPrinter, 1,
+                                reinterpret_cast<LPBYTE>(&docInfo));
+  if (jobId == 0) return false;
+  guard.docStarted = true;
+
+  if (!StartPagePrinter(hPrinter)) return false;
+  guard.pageStarted = true;
+
+  // Write in a loop to handle partial writes (WritePrinter may write fewer
+  // bytes than requested in a single call).
+  const BYTE* src       = bytes.data();
+  DWORD       remaining = static_cast<DWORD>(bytes.size());
+
+  while (remaining > 0) {
+    DWORD written = 0;
+    // WritePrinter signature: (HANDLE, LPVOID, DWORD, LPDWORD)
+    if (!WritePrinter(hPrinter,
+                      const_cast<LPVOID>(static_cast<const void*>(src)),
+                      remaining,
+                      &written)
+        || written == 0) {
+      // Partial or failed write — abort; guard destructor cleans up
+      return false;
+    }
+    src       += written;
+    remaining -= written;
+  }
+
+  // Explicit success path: mark guard state so destructor runs End* calls
+  // (they were already flagged true above; nothing extra needed).
+  return true;
 }
 
 void ThermalPrinterFlutterPlugin::PopulateDefaultStatus(flutter::EncodableMap& statusMap) const {
@@ -247,99 +341,128 @@ flutter::EncodableMap ThermalPrinterFlutterPlugin::BuildPrinterStatusMap(const s
   return statusMap;
 }
 
-// =====================================================
-// Método que gerencia as chamadas do Flutter
-// =====================================================
+// ─────────────────────────────────────────────
+// HandleMethodCall — dispatch Flutter MethodChannel calls
+// ─────────────────────────────────────────────
+
 void ThermalPrinterFlutterPlugin::HandleMethodCall(
     const flutter::MethodCall<flutter::EncodableValue> &method_call,
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
-  // Verifica qual método foi chamado
-  if (method_call.method_name().compare("getPlatformVersion") == 0) {
-    // Retorna a versão do Windows
-    std::ostringstream version_stream;
-    version_stream << "Windows ";
-    if (IsWindows10OrGreater()) {
-      version_stream << "10+";
-    } else if (IsWindows8OrGreater()) {
-      version_stream << "8";
-    } else if (IsWindows7OrGreater()) {
-      version_stream << "7";
+
+  const std::string& method = method_call.method_name();
+
+  // ── getPlatformVersion ──────────────────────────────────────────────────
+  if (method == "getPlatformVersion") {
+    std::ostringstream version;
+    version << "Windows ";
+    if (IsWindows10OrGreater())    version << "10+";
+    else if (IsWindows8OrGreater()) version << "8";
+    else if (IsWindows7OrGreater()) version << "7";
+    result->Success(flutter::EncodableValue(version.str()));
+    return;
+  }
+
+  // ── usbprinters ────────────────────────────────────────────────────────
+  if (method == "usbprinters") {
+    flutter::EncodableList list;
+    for (const auto& name : GetPrinters()) {
+      flutter::EncodableMap entry;
+      entry[flutter::EncodableValue("name")]        = flutter::EncodableValue(name);
+      entry[flutter::EncodableValue("type")]        = flutter::EncodableValue(std::string("usb"));
+      entry[flutter::EncodableValue("isConnected")] = flutter::EncodableValue(true);
+      list.push_back(flutter::EncodableValue(entry));
     }
-    result->Success(flutter::EncodableValue(version_stream.str()));
-  } else if (method_call.method_name().compare("usbprinters") == 0) {
-    // Retorna a lista de impressoras USB
-    auto printers = GetPrinters();
-    flutter::EncodableList printerList;
-    for (const auto& printer : printers) {
-      flutter::EncodableMap printerMap;
-      printerMap[flutter::EncodableValue("name")] = flutter::EncodableValue(printer);
-      printerMap[flutter::EncodableValue("type")] = flutter::EncodableValue("usb");
-      printerMap[flutter::EncodableValue("isConnected")] = flutter::EncodableValue(true);
-      printerList.push_back(flutter::EncodableValue(printerMap));
+    result->Success(flutter::EncodableValue(list));
+    return;
+  }
+
+  // ── getPrinters ────────────────────────────────────────────────────────
+  // Accepts {"printerType": "usb"|"bluetooth"|"bluethoot"|"network"}
+  // On Windows only USB/spooler printers are meaningful; always returns USB list.
+  if (method == "getPrinters") {
+    flutter::EncodableList list;
+    for (const auto& name : GetPrinters()) {
+      flutter::EncodableMap entry;
+      entry[flutter::EncodableValue("name")]        = flutter::EncodableValue(name);
+      entry[flutter::EncodableValue("type")]        = flutter::EncodableValue(std::string("usb"));
+      entry[flutter::EncodableValue("isConnected")] = flutter::EncodableValue(true);
+      list.push_back(flutter::EncodableValue(entry));
     }
-    result->Success(flutter::EncodableValue(printerList));
-  } else if (method_call.method_name().compare("writebytes") == 0) {
-    // Processa a impressão de bytes
-    const auto* arguments = std::get_if<flutter::EncodableMap>(method_call.arguments());
-    if (arguments) {
-      // Busca os argumentos no mapa
-      const auto bytes_iter = arguments->find(flutter::EncodableValue("bytes"));
-      const auto printer_iter = arguments->find(flutter::EncodableValue("printerName"));
-      
-      if (bytes_iter != arguments->end() && printer_iter != arguments->end()) {
-        // Converte os argumentos para os tipos corretos
-        const auto* bytes_list = std::get_if<flutter::EncodableList>(&bytes_iter->second);
-        const auto* printer_name = std::get_if<std::string>(&printer_iter->second);
-        
-        if (bytes_list && printer_name) {
-          // Converte a lista de inteiros para bytes
-          std::vector<uint8_t> bytes;
-          bytes.reserve(bytes_list->size());
-          
-          for (size_t i = 0; i < bytes_list->size(); ++i) {
-            const auto* int_value = std::get_if<int32_t>(&(*bytes_list)[i]);
-            if (int_value) {
-              bytes.push_back(static_cast<uint8_t>(*int_value));
-            }
-          }
-          
-          // Chama o método de impressão
-          PrintBytes(bytes, *printer_name);
-          result->Success(flutter::EncodableValue(true));
-          return;
-        }
-      }
+    result->Success(flutter::EncodableValue(list));
+    return;
+  }
+
+  // ── writebytes ─────────────────────────────────────────────────────────
+  // Wire contract: argument is Map {"bytes": Uint8List, "printerName": String}
+  // bytes may arrive as vector<uint8_t> (FlutterStandardTypedData) or
+  // EncodableList<int32_t> (legacy).
+  if (method == "writebytes") {
+    const auto* args = std::get_if<flutter::EncodableMap>(method_call.arguments());
+    if (!args) {
+      result->Error("invalid_arguments", "Expected a Map argument for writebytes");
+      return;
     }
-    result->Error("invalid_arguments", "Invalid arguments for printBytes");
-  } else if (method_call.method_name().compare("getPrinterStatus") == 0) {
+
+    const auto bytes_it   = args->find(flutter::EncodableValue("bytes"));
+    const auto printer_it = args->find(flutter::EncodableValue("printerName"));
+
+    if (bytes_it == args->end() || printer_it == args->end()) {
+      result->Error("invalid_arguments",
+                    "writebytes requires 'bytes' and 'printerName'");
+      return;
+    }
+
+    const auto* printerName = std::get_if<std::string>(&printer_it->second);
+    if (!printerName || printerName->empty()) {
+      result->Error("invalid_arguments", "printerName must be a non-empty string");
+      return;
+    }
+
+    auto bytesOpt = ExtractBytes(bytes_it->second);
+    if (!bytesOpt.has_value()) {
+      result->Error("invalid_arguments",
+                    "bytes must be Uint8List or List<int>");
+      return;
+    }
+
+    const bool ok = PrintBytes(bytesOpt.value(), *printerName);
+    if (ok) {
+      result->Success(flutter::EncodableValue(true));
+    } else {
+      result->Error("print_failed",
+                    "Failed to send bytes to printer. Check printer name and connectivity.");
+    }
+    return;
+  }
+
+  // ── getPrinterStatus ───────────────────────────────────────────────────
+  // Argument may be a Map {"printerName": String} or a bare String.
+  if (method == "getPrinterStatus") {
     std::string printerName;
-    const auto* arguments = std::get_if<flutter::EncodableMap>(method_call.arguments());
-    if (arguments != nullptr) {
-      const auto iter = arguments->find(flutter::EncodableValue("printerName"));
-      if (iter != arguments->end()) {
-        const auto* value = std::get_if<std::string>(&iter->second);
-        if (value != nullptr) {
+    if (const auto* args = std::get_if<flutter::EncodableMap>(method_call.arguments())) {
+      const auto it = args->find(flutter::EncodableValue("printerName"));
+      if (it != args->end()) {
+        if (const auto* value = std::get_if<std::string>(&it->second)) {
           printerName = *value;
         }
       }
-    } else {
-      const auto* directName = std::get_if<std::string>(method_call.arguments());
-      if (directName != nullptr) {
-        printerName = *directName;
-      }
+    } else if (const auto* directName = std::get_if<std::string>(method_call.arguments())) {
+      printerName = *directName;
     }
 
     if (printerName.empty()) {
-      result->Error("invalid_arguments", "printerName is required for getPrinterStatus");
+      result->Error("invalid_arguments",
+                    "printerName is required for getPrinterStatus");
       return;
     }
 
     auto statusMap = BuildPrinterStatusMap(printerName);
     result->Success(flutter::EncodableValue(statusMap));
     return;
-  } else {
-    result->NotImplemented();
   }
+
+  // ── not implemented ────────────────────────────────────────────────────
+  result->NotImplemented();
 }
 
 }  // namespace thermal_printer_flutter

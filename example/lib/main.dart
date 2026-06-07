@@ -56,7 +56,9 @@ class _MyAppState extends State<MyApp> {
     // Platform messages may fail, so we use a try/catch PlatformException.
     // We also handle the message potentially returning null.
     try {
-      platformVersion = await _thermalPrinterFlutterPlugin.getPlatformVersion() ?? 'Unknown platform version';
+      platformVersion =
+          await _thermalPrinterFlutterPlugin.getPlatformVersion() ??
+              'Unknown platform version';
     } on PlatformException {
       platformVersion = 'Failed to get platform version.';
     }
@@ -81,7 +83,8 @@ class _MyAppState extends State<MyApp> {
       List<Printer> bluetoothPrinters = [];
       if (!Platform.isWindows) {
         // Check if Bluetooth is enabled
-        final isEnabled = await _thermalPrinterFlutterPlugin.isBluetoothEnabled();
+        final isEnabled =
+            await _thermalPrinterFlutterPlugin.isBluetoothEnabled();
         if (!isEnabled) {
           // Request Bluetooth activation
           final enabled = await _thermalPrinterFlutterPlugin.enableBluetooth();
@@ -95,11 +98,13 @@ class _MyAppState extends State<MyApp> {
         }
 
         // Check and request Bluetooth permissions
-        final hasPermissions = await _thermalPrinterFlutterPlugin.checkBluetoothPermissions();
+        final hasPermissions =
+            await _thermalPrinterFlutterPlugin.checkBluetoothPermissions();
         if (!hasPermissions) {
           // Try again after a brief delay
           await Future.delayed(const Duration(seconds: 1));
-          final retryPermissions = await _thermalPrinterFlutterPlugin.checkBluetoothPermissions();
+          final retryPermissions =
+              await _thermalPrinterFlutterPlugin.checkBluetoothPermissions();
           if (!retryPermissions) {
             setState(() {
               _connectionError = 'Bluetooth permissions not granted';
@@ -111,7 +116,8 @@ class _MyAppState extends State<MyApp> {
 
         // Load Bluetooth printers
         try {
-          bluetoothPrinters = await _thermalPrinterFlutterPlugin.getPrinters(printerType: PrinterType.bluethoot);
+          bluetoothPrinters = await _thermalPrinterFlutterPlugin.getPrinters(
+              printerType: PrinterType.bluetooth);
         } catch (e) {
           print('Error loading Bluetooth printers: $e');
         }
@@ -120,7 +126,8 @@ class _MyAppState extends State<MyApp> {
       // Load USB printers
       List<Printer> usbPrinters = [];
       try {
-        usbPrinters = await _thermalPrinterFlutterPlugin.getPrinters(printerType: PrinterType.usb);
+        usbPrinters = await _thermalPrinterFlutterPlugin.getPrinters(
+            printerType: PrinterType.usb);
       } catch (e) {
         print('Error loading USB printers: $e');
       }
@@ -141,7 +148,8 @@ class _MyAppState extends State<MyApp> {
   }
 
   Future<void> _connectPrinter(Printer printer) async {
-    if (printer.type != PrinterType.bluethoot && printer.type != PrinterType.network) return;
+    if (printer.type != PrinterType.bluetooth &&
+        printer.type != PrinterType.network) return;
 
     setState(() {
       _isConnecting = true;
@@ -150,16 +158,22 @@ class _MyAppState extends State<MyApp> {
 
     try {
       if (printer.type == PrinterType.network) {
-        print('Tentando conectar à impressora de rede: ${printer.ip}:${printer.port}');
-        _showBanner('Conectando à impressora de rede ${printer.ip}:${printer.port}...');
+        print(
+            'Tentando conectar à impressora de rede: ${printer.ip}:${printer.port}');
+        _showBanner(
+            'Conectando à impressora de rede ${printer.ip}:${printer.port}...');
       }
 
-      final connected = await _thermalPrinterFlutterPlugin.connect(printer: printer);
+      final connected =
+          await _thermalPrinterFlutterPlugin.connect(printer: printer);
 
       setState(() {
         final index = _printers.indexWhere((p) =>
-            (p.type == PrinterType.bluethoot && p.bleAddress == printer.bleAddress) ||
-            (p.type == PrinterType.network && p.ip == printer.ip && p.port == printer.port));
+            (p.type == PrinterType.bluetooth &&
+                p.bleAddress == printer.bleAddress) ||
+            (p.type == PrinterType.network &&
+                p.ip == printer.ip &&
+                p.port == printer.port));
         if (index != -1) {
           _printers[index] = printer.copyWith(isConnected: connected);
           _selectedPrinter = _printers[index];
@@ -169,7 +183,8 @@ class _MyAppState extends State<MyApp> {
 
       if (connected) {
         if (printer.type == PrinterType.network) {
-          print('Conectado com sucesso à impressora de rede: ${printer.ip}:${printer.port}');
+          print(
+              'Conectado com sucesso à impressora de rede: ${printer.ip}:${printer.port}');
           _showBanner('Conectado com sucesso à impressora de rede!');
         } else {
           _showBanner('Conectado com sucesso à impressora Bluetooth!');
@@ -217,7 +232,8 @@ class _MyAppState extends State<MyApp> {
     if (_selectedPrinter == null) return;
 
     try {
-      final generator = Generator(PaperSize.mm80, await CapabilityProfile.load());
+      final generator =
+          Generator(PaperSize.mm80, await CapabilityProfile.load());
       List<int> bytes = [];
       bytes += generator.reset();
       bytes += generator.text('Print Test',
@@ -244,7 +260,8 @@ class _MyAppState extends State<MyApp> {
 
       bytes += generator.feed(2);
       bytes += generator.cut();
-      await _thermalPrinterFlutterPlugin.printBytes(bytes: bytes, printer: _selectedPrinter!);
+      await _thermalPrinterFlutterPlugin.printBytes(
+          bytes: bytes, printer: _selectedPrinter!);
     } catch (e) {
       print('Error printing: $e');
     }
@@ -296,10 +313,13 @@ class _MyAppState extends State<MyApp> {
 
   Future<void> _checkBluetoothPermissions() async {
     try {
-      final hasPermissions = await _thermalPrinterFlutterPlugin.checkBluetoothPermissions();
+      final hasPermissions =
+          await _thermalPrinterFlutterPlugin.checkBluetoothPermissions();
       if (!mounted) return;
       _showBanner(
-        hasPermissions ? 'Bluetooth permissions granted' : 'Bluetooth permissions not granted',
+        hasPermissions
+            ? 'Bluetooth permissions granted'
+            : 'Bluetooth permissions not granted',
         isError: !hasPermissions,
       );
     } catch (e) {
@@ -313,7 +333,9 @@ class _MyAppState extends State<MyApp> {
       final enabled = await _thermalPrinterFlutterPlugin.enableBluetooth();
       if (!mounted) return;
       _showBanner(
-        enabled ? 'Bluetooth enabled successfully' : 'Failed to enable Bluetooth',
+        enabled
+            ? 'Bluetooth enabled successfully'
+            : 'Failed to enable Bluetooth',
         isError: !enabled,
       );
     } catch (e) {
@@ -339,13 +361,16 @@ class _MyAppState extends State<MyApp> {
       _showBanner('Testando conectividade com $ip:$port...');
 
       // Testa conectividade usando Socket diretamente
-      final socket = await Socket.connect(ip, int.tryParse(port) ?? 9100, timeout: const Duration(seconds: 5));
+      final socket = await Socket.connect(ip, int.tryParse(port) ?? 9100,
+          timeout: const Duration(seconds: 5));
       await socket.close();
 
       _showBanner('Conectividade OK! A impressora está acessível na rede.');
     } catch (e) {
       print('Teste de conectividade falhou: $e');
-      _showBanner('Teste de conectividade falhou: $e. Verifique o IP, porta e se a impressora está ligada.', isError: true);
+      _showBanner(
+          'Teste de conectividade falhou: $e. Verifique o IP, porta e se a impressora está ligada.',
+          isError: true);
     } finally {
       setState(() {
         _isConnecting = false;
@@ -361,15 +386,51 @@ class _MyAppState extends State<MyApp> {
     });
 
     try {
-      print('Descoberta automática não está implementada nesta versão.');
-      await Future.delayed(const Duration(milliseconds: 300));
-      _showBanner('Descoberta automática ainda não disponível neste build', isError: true);
-    } finally {
-      if (!mounted) return;
+      print('Iniciando descoberta automática de impressoras na rede...');
+
+      final discoveredPrinters =
+          await _thermalPrinterFlutterPlugin.discoverNetworkPrinters(
+        onProgress: (progress) {
+          setState(() {
+            _discoveryProgress = progress;
+          });
+          print('Progress: $progress');
+        },
+      );
+
       setState(() {
+        // Remove impressoras de rede existentes para evitar duplicatas
+        _printers.removeWhere((printer) => printer.type == PrinterType.network);
+
+        // Adiciona as impressoras descobertas
+        _printers.addAll(discoveredPrinters);
+
+        if (discoveredPrinters.isNotEmpty && _selectedPrinter == null) {
+          _selectedPrinter = discoveredPrinters.first;
+        }
+
         _isDiscovering = false;
         _discoveryProgress = '';
       });
+
+      if (discoveredPrinters.isEmpty) {
+        _showBanner(
+            'Nenhuma impressora encontrada na rede. Verifique se as impressoras estão ligadas e conectadas à mesma rede.');
+      } else {
+        _showBanner(
+            'Encontradas ${discoveredPrinters.length} impressoras na rede!');
+      }
+
+      print(
+          'Descoberta concluída. Encontradas ${discoveredPrinters.length} impressoras');
+    } catch (e) {
+      print('Erro durante descoberta: $e');
+      setState(() {
+        _connectionError = 'Erro durante descoberta: $e';
+        _isDiscovering = false;
+        _discoveryProgress = '';
+      });
+      _showBanner('Erro durante descoberta: $e', isError: true);
     }
   }
 
@@ -545,15 +606,19 @@ class _MyAppState extends State<MyApp> {
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Icon(
-                              printer.type == PrinterType.bluethoot
+                              printer.type == PrinterType.bluetooth
                                   ? Icons.bluetooth
                                   : printer.type == PrinterType.network
                                       ? Icons.language
                                       : Icons.usb,
-                              color: printer.type == PrinterType.bluethoot
-                                  ? (printer.isConnected ? Colors.blue : Colors.grey)
+                              color: printer.type == PrinterType.bluetooth
+                                  ? (printer.isConnected
+                                      ? Colors.blue
+                                      : Colors.grey)
                                   : printer.type == PrinterType.network
-                                      ? (printer.isConnected ? Colors.green : Colors.grey)
+                                      ? (printer.isConnected
+                                          ? Colors.green
+                                          : Colors.grey)
                                       : Colors.black,
                             ),
                             const SizedBox(width: 8),
@@ -563,11 +628,16 @@ class _MyAppState extends State<MyApp> {
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
-                            if (printer.type == PrinterType.bluethoot || printer.type == PrinterType.network)
+                            if (printer.type == PrinterType.bluetooth ||
+                                printer.type == PrinterType.network)
                               Text(
-                                printer.isConnected ? ' (Connected)' : ' (Disconnected)',
+                                printer.isConnected
+                                    ? ' (Connected)'
+                                    : ' (Disconnected)',
                                 style: TextStyle(
-                                  color: printer.isConnected ? Colors.green : Colors.red,
+                                  color: printer.isConnected
+                                      ? Colors.green
+                                      : Colors.red,
                                 ),
                               ),
                           ],
@@ -581,7 +651,9 @@ class _MyAppState extends State<MyApp> {
                               setState(() {
                                 _selectedPrinter = newValue;
                               });
-                              if ((newValue.type == PrinterType.bluethoot || newValue.type == PrinterType.network) && !newValue.isConnected) {
+                              if ((newValue.type == PrinterType.bluetooth ||
+                                      newValue.type == PrinterType.network) &&
+                                  !newValue.isConnected) {
                                 _connectPrinter(newValue);
                               }
                             }
@@ -603,24 +675,33 @@ class _MyAppState extends State<MyApp> {
                       runSpacing: 10,
                       children: [
                         ElevatedButton(
-                          onPressed: _selectedPrinter?.isConnected == true ? _printTest : null,
+                          onPressed: (_selectedPrinter?.isConnected == true ||
+                                  _selectedPrinter?.type == PrinterType.usb)
+                              ? _printTest
+                              : null,
                           child: const Text('Print Test'),
                         ),
                         ElevatedButton(
                           onPressed: _selectedPrinter?.isConnected == true
                               ? () async {
                                   try {
-                                    await _thermalPrinterFlutterPlugin.disconnect(printer: _selectedPrinter!);
+                                    await _thermalPrinterFlutterPlugin
+                                        .disconnect(printer: _selectedPrinter!);
                                     setState(() {
-                                      final index = _printers.indexWhere((p) => p == _selectedPrinter);
+                                      final index = _printers.indexWhere(
+                                          (p) => p == _selectedPrinter);
                                       if (index != -1) {
-                                        _printers[index] = _printers[index].copyWith(isConnected: false);
+                                        _printers[index] = _printers[index]
+                                            .copyWith(isConnected: false);
                                         _selectedPrinter = _printers[index];
                                       }
                                     });
-                                    _showBanner('Impressora desconectada com sucesso');
+                                    _showBanner(
+                                        'Impressora desconectada com sucesso');
                                   } catch (e) {
-                                    _showBanner('Erro ao desconectar impressora: $e', isError: true);
+                                    _showBanner(
+                                        'Erro ao desconectar impressora: $e',
+                                        isError: true);
                                   }
                                 }
                               : null,
@@ -729,7 +810,8 @@ class _MyAppState extends State<MyApp> {
                             ),
                             const SizedBox(width: 8),
                             ElevatedButton(
-                              onPressed: _isConnecting ? null : _testNetworkConnection,
+                              onPressed:
+                                  _isConnecting ? null : _testNetworkConnection,
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: Colors.blue,
                                 foregroundColor: Colors.white,
