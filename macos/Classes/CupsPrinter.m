@@ -109,4 +109,69 @@ static NSString *const kCupsErrorDomain = @"thermal_printer_flutter.cups";
     return YES;
 }
 
++ (NSDictionary<NSString *, id> *)statusForPrinter:(NSString *)printerName {
+    NSMutableDictionary<NSString *, id> *status = [@{
+        @"hasStatus": @NO,
+        @"hasError": @NO,
+        @"isPaperOut": @NO,
+        @"isPaperJam": @NO,
+        @"isDoorOpen": @NO,
+        @"isOffline": @NO,
+        @"isPaperLow": @NO,
+        @"needsUserAction": @NO,
+        @"rawStatus": @0,
+        @"description": @"",
+    } mutableCopy];
+
+    if (printerName.length == 0) {
+        status[@"description"] = @"Printer name is empty";
+        return status;
+    }
+
+    cups_dest_t *dest = cupsGetNamedDest(CUPS_HTTP_DEFAULT, printerName.UTF8String, NULL);
+    if (dest == NULL) {
+        status[@"description"] = @"Printer not found";
+        return status;
+    }
+
+    const char *stateStr = cupsGetOption("printer-state", dest->num_options, dest->options);
+    const char *reasonsStr = cupsGetOption("printer-state-reasons", dest->num_options, dest->options);
+
+    // printer-state: 3=idle, 4=processing, 5=stopped
+    int state = stateStr ? [[NSString stringWithUTF8String:stateStr] intValue] : 0;
+    NSString *reasons = reasonsStr ? [NSString stringWithUTF8String:reasonsStr] : @"";
+
+    BOOL isPaperOut = [reasons containsString:@"media-empty"] || [reasons containsString:@"media-needed"];
+    BOOL isPaperLow = [reasons containsString:@"media-low"];
+    BOOL isPaperJam = [reasons containsString:@"jam"];
+    BOOL isDoorOpen = [reasons containsString:@"cover-open"] || [reasons containsString:@"door-open"];
+    BOOL isOffline = [reasons containsString:@"offline"] || [reasons containsString:@"shutdown"] || state == 5;
+    BOOL needsUserAction = isPaperOut || isPaperJam || isDoorOpen || [reasons containsString:@"error"];
+    BOOL hasError = needsUserAction || isOffline;
+
+    status[@"hasStatus"] = @YES;
+    status[@"rawStatus"] = @(state);
+    status[@"isPaperOut"] = @(isPaperOut);
+    status[@"isPaperLow"] = @(isPaperLow || isPaperOut);
+    status[@"isPaperJam"] = @(isPaperJam);
+    status[@"isDoorOpen"] = @(isDoorOpen);
+    status[@"isOffline"] = @(isOffline);
+    status[@"needsUserAction"] = @(needsUserAction);
+    status[@"hasError"] = @(hasError);
+
+    NSMutableString *description = [NSMutableString string];
+    if (isPaperOut) [description appendString:@"Out of paper. "];
+    if (isPaperJam) [description appendString:@"Paper jam. "];
+    if (isDoorOpen) [description appendString:@"Cover open. "];
+    if (needsUserAction && !isPaperOut && !isPaperJam && !isDoorOpen) {
+        [description appendString:@"User intervention required. "];
+    }
+    if (isOffline && !isPaperOut && !isDoorOpen) [description appendString:@"Printer offline. "];
+    if (description.length == 0) [description appendString:@"Printer ready."];
+    status[@"description"] = description;
+
+    cupsFreeDests(1, dest);
+    return status;
+}
+
 @end

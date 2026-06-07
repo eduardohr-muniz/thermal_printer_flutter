@@ -53,14 +53,14 @@ public class ThermalPrinterFlutterPlugin: NSObject, CBCentralManagerDelegate, CB
         case "enableBluetooth":
             result(false)
 
-        case "getPrinters":
-            handleGetPrinters(call: call, result: result)
-
         case "pairedbluetooths":
             handlePairedBluetooths(result: result)
 
         case "usbprinters":
             result(CupsPrinter.listPrinters())
+
+        case "getPrinterStatus":
+            handleGetPrinterStatus(call: call, result: result)
 
         case "connect":
             handleConnect(call: call, result: result)
@@ -81,26 +81,16 @@ public class ThermalPrinterFlutterPlugin: NSObject, CBCentralManagerDelegate, CB
 
     // MARK: - Method Handlers
 
-    private func handleGetPrinters(call: FlutterMethodCall, result: @escaping FlutterResult) {
-        guard let args = call.arguments as? [String: Any],
-              let printerType = args["printerType"] as? String else {
-            result([])
-            return
+    /// Returns the CUPS state of a USB/spooler printer. Dart only calls this
+    /// for USB printers; Bluetooth/network return `PrinterStatus.unknown`.
+    private func handleGetPrinterStatus(call: FlutterMethodCall, result: @escaping FlutterResult) {
+        var printerName = ""
+        if let args = call.arguments as? [String: Any], let name = args["printerName"] as? String {
+            printerName = name
+        } else if let name = call.arguments as? String {
+            printerName = name
         }
-        let isBluetoothType = printerType == "bluetooth" || printerType == "bluethoot"
-        if isBluetoothType {
-            discoveredDevices.removeAll()
-            centralManager?.scanForPeripherals(withServices: nil, options: nil)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
-                guard let self = self else { return }
-                self.centralManager?.stopScan()
-                result(self.buildBluetoothDeviceList(from: self.discoveredDevices))
-            }
-        } else if printerType == "usb" {
-            result(CupsPrinter.listPrinters())
-        } else {
-            result([])
-        }
+        result(CupsPrinter.status(forPrinter: printerName))
     }
 
     private func handlePairedBluetooths(result: @escaping FlutterResult) {

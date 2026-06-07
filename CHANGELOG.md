@@ -22,7 +22,9 @@
 - Removed dead `printstring`/`printBytes` method handlers from the iOS/macOS plugins (never invoked from Dart).
 - **Fixed Bluetooth discovery on iOS:** the Dart layer lists printers via the `pairedbluetooths` channel method, but the iOS plugin only handled `getPrinters`, so `getPrinters(printerType: bluetooth)` always returned an empty list on iOS. iOS now handles `pairedbluetooths` (runs a short BLE scan).
 - Added `dispose()` to the plugin to close pooled network connections (prevents leaked sockets on teardown).
-- Removed the dead `getPrinters` channel handler from the Windows plugin (Dart calls `usbprinters` directly).
+- Removed the dead `getPrinters` channel handler from the Windows, macOS, iOS and Android plugins (Dart calls `usbprinters`/`pairedbluetooths` directly).
+- Implemented `getPrinterStatus` on macOS via CUPS (`printer-state` / `printer-state-reasons`), so USB printer status now works on macOS as well as Windows.
+- Added a GitHub Actions CI workflow: analyze + test (coverage) and example builds for iOS, macOS, Android, Windows and Linux.
 - Added unit test coverage (100% of the Dart library).
 
 ## 0.0.1+6

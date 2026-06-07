@@ -55,9 +55,6 @@ public class SwiftThermalPrinterFlutterPlugin: NSObject, CBCentralManagerDelegat
         case "enableBluetooth":
             result(false)
 
-        case "getPrinters":
-            handleGetPrinters(call: call, result: result)
-
         case "pairedbluetooths":
             // Dart's Bluetooth repository lists printers via `pairedbluetooths`.
             // On iOS there are no "paired" BLE devices, so we run a short scan.
@@ -82,23 +79,7 @@ public class SwiftThermalPrinterFlutterPlugin: NSObject, CBCentralManagerDelegat
 
     // MARK: - Method Handlers
 
-    private func handleGetPrinters(call: FlutterMethodCall, result: @escaping FlutterResult) {
-        guard let args = call.arguments as? [String: Any],
-              let printerType = args["printerType"] as? String else {
-            result([])
-            return
-        }
-        let isBluetoothType = printerType == "bluetooth" || printerType == "bluethoot"
-        if isBluetoothType {
-            scanForBluetoothPrinters(result: result)
-        } else {
-            // USB / network are not handled on iOS via this path.
-            result([])
-        }
-    }
-
     /// Scans for nearby BLE peripherals for ~5s and returns them as printer maps.
-    /// Shared by both the `getPrinters` and `pairedbluetooths` channel methods.
     private func scanForBluetoothPrinters(result: @escaping FlutterResult) {
         discoveredDevices.removeAll()
         centralManager?.scanForPeripherals(withServices: nil, options: nil)

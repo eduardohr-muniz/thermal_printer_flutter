@@ -32,10 +32,6 @@ private const val BLUETOOTH_ENABLE_REQUEST_CODE = 2
 /// Canonical string for the bluetooth printer type returned to Dart.
 private const val PRINTER_TYPE_BLUETOOTH = "bluetooth"
 
-/// Accepts both the current "bluetooth" and legacy "bluethoot" typo.
-private fun String.isBluetoothType(): Boolean =
-    equals("bluetooth", ignoreCase = true) || equals("bluethoot", ignoreCase = true)
-
 /// Decodes bytes arriving from Dart's Uint8List (ByteArray) or legacy List<Int>.
 /// Returns null if the argument is neither.
 internal fun decodeBytes(arguments: Any?): ByteArray? = when (arguments) {
@@ -89,7 +85,6 @@ class ThermalPrinterFlutterPlugin :
             "checkBluetoothPermissions" -> checkBluetoothPermissions(result)
             "isBluetoothEnabled" -> result.success(bluetoothAdapter()?.isEnabled ?: false)
             "enableBluetooth" -> enableBluetooth(result)
-            "getPrinters" -> handleGetPrinters(call, result)
             "pairedbluetooths" -> handlePairedBluetooths(result)
             "usbprinters" -> result.success(emptyList<Map<String, Any>>())
             "connect" -> handleConnect(call, result)
@@ -101,20 +96,6 @@ class ThermalPrinterFlutterPlugin :
     }
 
     // ── Handler helpers ────────────────────────────────────────────────────────
-
-    private fun handleGetPrinters(call: MethodCall, result: Result) {
-        val printerType = (call.arguments as? Map<*, *>)?.get("printerType") as? String
-        if (printerType != null && !printerType.isBluetoothType()) {
-            // USB / network not handled on Android via this path
-            result.success(emptyList<Map<String, Any>>())
-            return
-        }
-        if (!checkBluetoothPermission()) {
-            result.error("PERMISSION_DENIED", "Bluetooth permission not granted", null)
-            return
-        }
-        result.success(buildPairedDeviceMaps())
-    }
 
     private fun handlePairedBluetooths(result: Result) {
         if (!checkBluetoothPermission()) {

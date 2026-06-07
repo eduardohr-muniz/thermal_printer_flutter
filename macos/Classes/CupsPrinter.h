@@ -24,6 +24,13 @@ NS_ASSUME_NONNULL_BEGIN
            toPrinter:(NSString *)printerName
                error:(NSError * _Nullable * _Nullable)error;
 
+/// Queries the CUPS state of the named queue.
+///
+/// Returns a dictionary compatible with the Dart `PrinterStatus` model:
+/// `{ hasStatus, hasError, isPaperOut, isPaperJam, isDoorOpen, isOffline,
+///    isPaperLow, needsUserAction, rawStatus, description }`.
++ (NSDictionary<NSString *, id> *)statusForPrinter:(NSString *)printerName;
+
 @end
 
 NS_ASSUME_NONNULL_END
