@@ -4,6 +4,16 @@ import 'package:thermal_printer_flutter/thermal_printer_flutter.dart';
 import 'printer_repository.dart';
 
 class BluetoothPrinterRepository implements PrinterRepository {
+  /// Cria o repositório Bluetooth.
+  ///
+  /// [reconnectDelay] é a pausa após desconectar antes de reconectar em
+  /// [connect] (alguns adaptadores precisam de um respiro). Exposto para
+  /// permitir testes rápidos e ajuste fino.
+  BluetoothPrinterRepository({
+    Duration reconnectDelay = const Duration(milliseconds: 500),
+  }) : _reconnectDelay = reconnectDelay;
+
+  final Duration _reconnectDelay;
   final MethodChannel _channel = const MethodChannel('thermal_printer_flutter');
 
   @override
@@ -20,11 +30,13 @@ class BluetoothPrinterRepository implements PrinterRepository {
             isConnected: device['isConnected'] ?? false,
           );
         } else if (device is String) {
+          // Formato esperado: "name#address". Trata defensivamente entradas
+          // sem '#' para não descartar a lista inteira por um item malformado.
           final parts = device.split('#');
           return Printer(
             type: PrinterType.bluetooth,
-            name: parts[0],
-            bleAddress: parts[1],
+            name: parts.isNotEmpty ? parts[0] : '',
+            bleAddress: parts.length > 1 ? parts[1] : '',
           );
         }
         return Printer(
@@ -45,7 +57,7 @@ class BluetoothPrinterRepository implements PrinterRepository {
       await disconnect(printer);
 
       // Aguarda um momento para garantir que a desconexão foi concluída
-      await Future.delayed(const Duration(milliseconds: 500));
+      await Future.delayed(_reconnectDelay);
 
       // Tenta conectar
       final bool result =

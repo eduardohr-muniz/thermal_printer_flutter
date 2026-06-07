@@ -150,7 +150,13 @@ class NetworkPrinterRepository implements PrinterRepository {
     try {
       final key = '${printer.ip}:${printer.port}';
       final networkPrinter = _networkPrinters[key];
-      return networkPrinter?.isConnected ?? false;
+      if (networkPrinter == null) return false;
+      // Remove conexões mortas do pool para não vazar entradas acumuladas.
+      if (!networkPrinter.isConnected) {
+        _networkPrinters.remove(key);
+        return false;
+      }
+      return true;
       // coverage:ignore-start
       // Guarda defensiva: acesso ao mapa não lança.
     } catch (e) {

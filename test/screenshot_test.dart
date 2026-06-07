@@ -79,16 +79,38 @@ void main() {
       expect(image.height, greaterThan(0));
     });
 
-    testWidgets('supports flipHorizontal and disabled text scaling',
-        (tester) async {
-      final image = await capture(
-        tester,
-        useBetterText: false,
-        flipHorizontal: true,
-        applyTextScaling: false,
-      );
+    testWidgets('flipHorizontal mirrors the image', (tester) async {
+      // Widget assimétrico: metade esquerda preta, metade direita branca.
+      Widget asymmetric() => Row(
+            children: const [
+              SizedBox(
+                  width: 32,
+                  height: 32,
+                  child: ColoredBox(color: Colors.black)),
+              SizedBox(
+                  width: 32,
+                  height: 32,
+                  child: ColoredBox(color: Colors.white)),
+            ],
+          );
 
-      expect(image.width, greaterThan(0));
+      final normal = await capture(tester,
+          useBetterText: false, applyTextScaling: false, child: asymmetric());
+      final flipped = await capture(tester,
+          useBetterText: false,
+          applyTextScaling: false,
+          flipHorizontal: true,
+          child: asymmetric());
+
+      expect(flipped.width, normal.width);
+      expect(flipped.height, normal.height);
+
+      final y = normal.height ~/ 2;
+      // Pixel da borda esquerda: preto no normal, branco após espelhar.
+      final leftNormal = normal.getPixel(1, y);
+      final leftFlipped = flipped.getPixel(1, y);
+      expect(leftFlipped.luminanceNormalized,
+          greaterThan(leftNormal.luminanceNormalized));
     });
 
     testWidgets('fast path renders transparent pixels as white',

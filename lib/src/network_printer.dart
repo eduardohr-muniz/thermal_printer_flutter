@@ -261,6 +261,19 @@ class NetworkPrinter {
     }
   }
 
+  /// Verifica se [ip] está em uma faixa IPv4 privada (RFC 1918):
+  /// `10.0.0.0/8`, `172.16.0.0/12` ou `192.168.0.0/16`.
+  static bool _isPrivateIPv4(String ip) {
+    if (ip.startsWith('192.168.') || ip.startsWith('10.')) return true;
+    // 172.16.0.0 – 172.31.255.255 (não o intervalo 172.0–15 / 172.32–255).
+    if (ip.startsWith('172.')) {
+      final parts = ip.split('.');
+      final second = parts.length > 1 ? int.tryParse(parts[1]) : null;
+      return second != null && second >= 16 && second <= 31;
+    }
+    return false;
+  }
+
   static Future<String?> _getLocalNetworkSubnet(
       NetworkInterfaceLister interfaceLister) async {
     try {
@@ -284,14 +297,12 @@ class NetworkPrinter {
         }
       }
 
-      // Fallback: procura qualquer interface IPv4 não-loopback
+      // Fallback: procura qualquer interface IPv4 privada não-loopback.
       for (final interface in interfaces) {
         for (final address in interface.addresses) {
           if (address.type == InternetAddressType.IPv4 &&
               !address.isLoopback &&
-              (address.address.startsWith('192.168.') ||
-                  address.address.startsWith('10.') ||
-                  address.address.startsWith('172.'))) {
+              _isPrivateIPv4(address.address)) {
             log('Interface de rede encontrada (fallback): ${interface.name} - ${address.address}',
                 name: 'NETWORK_SCANNER');
             return address.address;

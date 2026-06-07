@@ -9,7 +9,13 @@
 - Print jobs are now serialized internally, so concurrent/looped `printBytes` calls never overlap (a common cause of "runaway"/duplicated printing).
 - Fixed runaway/multiple-copies on Windows: the spooler now uses `RAW` datatype **and** forces `dmCopies = 1`, so a driver "Copies" default can no longer multiply RAW jobs. Partial/aborted jobs are deleted from the spooler instead of being sent truncated.
 - Byte payloads are now sent as `Uint8List` across all platforms
-- Added unit test coverage
+- Fixed `flipHorizontal` on `screenShotWidget`: it was accepted but never applied; the captured image is now actually mirrored.
+- Hardened Bluetooth printer parsing: a malformed paired-device string no longer drops the whole list (`RangeError`).
+- `BluetoothPrinterRepository` reconnect delay is now configurable (was a hardcoded 500 ms).
+- Network discovery now only auto-detects genuinely private subnets (correct `172.16.0.0/12` range) and prunes dead pooled connections.
+- Windows printer status descriptions are now in English (was mixed Portuguese).
+- Removed unused internal platform helper.
+- Added unit test coverage (100% of the Dart library).
 
 ## 0.0.1+6
 

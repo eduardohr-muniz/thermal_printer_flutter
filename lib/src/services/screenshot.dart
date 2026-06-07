@@ -74,11 +74,17 @@ class ThermalScreenshot {
         final int newWidth = (width % 8 != 0) ? ((width ~/ 8) * 8) : width;
 
         // Conversão direta para imagem monocromática
-        final monoImage = useBetterText
+        var monoImage = useBetterText
             ? _convertTextOptimizedMonochrome(
                 rgbaBytes, image.width, image.height, newWidth, threshold)
             : _convertRgbaToMonochromeFast(
                 rgbaBytes, image.width, image.height, newWidth, threshold);
+
+        // Espelha horizontalmente quando solicitado (algumas impressoras
+        // térmicas/refletivas exigem a imagem invertida).
+        if (flipHorizontal) {
+          monoImage = img.flipHorizontal(monoImage);
+        }
 
         image.dispose();
         log('Screen shot time: ${stopwatch.elapsedMilliseconds}ms',

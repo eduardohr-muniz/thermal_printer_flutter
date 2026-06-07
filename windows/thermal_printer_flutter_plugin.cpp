@@ -398,18 +398,18 @@ flutter::EncodableMap ThermalPrinterFlutterPlugin::BuildPrinterStatusMap(const s
 
   std::ostringstream description;
   if (hasError) {
-    if (isPaperOut) description << "Sem papel. ";
-    if (isPaperJam) description << "Papel encravado. ";
-    if (isDoorOpen) description << "Tampa aberta. ";
-    if (needsUserAction) description << "Requer intervenção do usuário. ";
+    if (isPaperOut) description << "Out of paper. ";
+    if (isPaperJam) description << "Paper jam. ";
+    if (isDoorOpen) description << "Cover open. ";
+    if (needsUserAction) description << "User intervention required. ";
   }
 
   if (isOffline && !isPaperOut && !isDoorOpen) {
-    description << "Impressora offline. ";
+    description << "Printer offline. ";
   }
 
   if (description.str().empty()) {
-    description << "Impressora pronta.";
+    description << "Printer ready.";
   }
 
   statusMap[flutter::EncodableValue("description")] = flutter::EncodableValue(description.str());
