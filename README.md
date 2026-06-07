@@ -249,6 +249,22 @@ bytes += generator.cut();
 await thermalPrinter.printBytes(bytes: bytes, printer: printer);
 ```
 
+### Printing multiple copies
+
+Use the `copies` parameter instead of calling `printBytes` in a loop. The
+payload is repeated inside a **single** job, so the behaviour is identical on
+every platform and does not depend on the printer driver's "Copies" setting
+(on Windows that setting is forced to `1`):
+
+```dart
+// Prints the same receipt 3 times in one job.
+await thermalPrinter.printBytes(bytes: bytes, printer: printer, copies: 3);
+```
+
+Each copy repeats `bytes` exactly, so make sure your payload ends with the
+desired cut/feed (e.g. `generator.cut()`). Concurrent `printBytes` calls are
+serialized internally, so jobs never overlap even if you do call it in a loop.
+
 ## Network Discovery Details
 
 The automatic network discovery feature:

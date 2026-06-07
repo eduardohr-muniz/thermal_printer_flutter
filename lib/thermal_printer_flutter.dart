@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/cupertino.dart';
 import 'package:thermal_printer_flutter/src/enums/printer_type.dart';
 import 'package:thermal_printer_flutter/src/models/printer.dart';
@@ -22,6 +24,35 @@ class ThermalPrinterFlutter implements ThermalPrinterFlutterPlatform {
       : _networkRepository = networkRepository ?? NetworkPrinterRepository();
 
   final NetworkPrinterRepository _networkRepository;
+
+  /// Fila serial de impressão.
+  ///
+  /// Garante que apenas um job de impressão esteja em andamento por vez:
+  /// cada chamada de [printBytes] encadeia-se na anterior. Isso evita jobs
+  /// RAW concorrentes no spooler (causa de impressão "maluca"/duplicada
+  /// quando o chamador dispara [printBytes] em loop).
+  Future<void> _printQueue = Future<void>.value();
+
+  /// Executa [action] de forma serializada em relação a outras impressões.
+  ///
+  /// Erros de uma impressão não interrompem a fila das próximas.
+  Future<T> _enqueuePrint<T>(Future<T> Function() action) {
+    final completer = Completer<T>();
+    final previous = _printQueue;
+    // A fila avança independentemente de [action] ter sucesso ou falha.
+    _printQueue = completer.future.then<void>(
+      (_) {},
+      onError: (_) {},
+    );
+    previous.whenComplete(() async {
+      try {
+        completer.complete(await action());
+      } catch (e, s) {
+        completer.completeError(e, s);
+      }
+    });
+    return completer.future;
+  }
 
   /// Retorna a versão da plataforma host.
   @override
@@ -73,11 +104,35 @@ class ThermalPrinterFlutter implements ThermalPrinterFlutterPlatform {
   }
 
   /// Envia [bytes] (ESC/POS) para a [printer].
+  ///
+  /// [copies] controla quantas vias serão impressas (padrão `1`). As cópias
+  /// são montadas no próprio fluxo de bytes (o payload é repetido [copies]
+  /// vezes) e enviadas em **um único job**, de forma idêntica em todas as
+  /// plataformas. Não dependa do contador de cópias do driver — no Windows
+  /// ele é forçado para `1` justamente para que a quantidade aqui seja a
+  /// fonte da verdade.
+  ///
+  /// Prefira passar [copies] em vez de chamar [printBytes] em laço: as
+  /// chamadas são serializadas internamente, mas uma única chamada com
+  /// [copies] gera um job só e é mais previsível.
+  ///
+  /// Cada via repete exatamente [bytes]; portanto garanta que o payload
+  /// termine com o corte/avanço desejado (ex.: `generator.cut()`).
   @override
-  Future<void> printBytes(
-      {required List<int> bytes, required Printer printer}) async {
-    return await ThermalPrinterFlutterPlatform.instance
-        .printBytes(bytes: bytes, printer: printer);
+  Future<void> printBytes({
+    required List<int> bytes,
+    required Printer printer,
+    int copies = 1,
+  }) {
+    assert(copies >= 1, 'copies deve ser >= 1');
+    if (copies < 1) copies = 1;
+
+    final List<int> payload = copies == 1
+        ? bytes
+        : <int>[for (int i = 0; i < copies; i++) ...bytes];
+
+    return _enqueuePrint(() => ThermalPrinterFlutterPlatform.instance
+        .printBytes(bytes: payload, printer: printer));
   }
 
   /// Conecta-se à [printer].

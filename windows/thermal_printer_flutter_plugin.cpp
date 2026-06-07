@@ -166,6 +166,72 @@ std::vector<std::string> ThermalPrinterFlutterPlugin::GetPrinters() {
 // Every Win32 call is checked; on failure we clean up and return false.
 // ─────────────────────────────────────────────
 
+// Opens the named printer with a DEVMODE that forces a single copy.
+//
+// The Windows print processor (winprint) honours the driver's "Copies"
+// setting even for RAW jobs, so a driver configured with copies > 1 makes a
+// single RAW submission come out multiple times. Forcing dmCopies = 1 makes
+// the byte stream the single source of truth for how many receipts print
+// (copies are repeated in the payload by the Dart layer instead).
+//
+// On success sets *outHandle and returns true. Falls back to a plain
+// OpenPrinter when the DEVMODE cannot be obtained, so behaviour degrades
+// gracefully rather than failing the print.
+static bool OpenPrinterForRawSingleCopy(const std::wstring& wName,
+                                        HANDLE* outHandle) {
+  *outHandle = nullptr;
+
+  HANDLE hProbe = nullptr;
+  if (!OpenPrinter(const_cast<LPWSTR>(wName.c_str()), &hProbe, nullptr)) {
+    return false;
+  }
+
+  // Determine the DEVMODE buffer size for this driver.
+  LONG needed = DocumentProperties(nullptr, hProbe,
+                                   const_cast<LPWSTR>(wName.c_str()),
+                                   nullptr, nullptr, 0);
+  if (needed <= 0) {
+    // Driver exposes no DEVMODE — use the plain handle as-is.
+    *outHandle = hProbe;
+    return true;
+  }
+
+  std::vector<BYTE> devmodeBuf(static_cast<size_t>(needed));
+  DEVMODE* pDevMode = reinterpret_cast<DEVMODE*>(devmodeBuf.data());
+
+  // Load the driver defaults, then override the copy count.
+  if (DocumentProperties(nullptr, hProbe,
+                         const_cast<LPWSTR>(wName.c_str()),
+                         pDevMode, nullptr, DM_OUT_BUFFER) != IDOK) {
+    *outHandle = hProbe;
+    return true;
+  }
+
+  pDevMode->dmFields |= DM_COPIES;
+  pDevMode->dmCopies = 1;
+  DocumentProperties(nullptr, hProbe,
+                     const_cast<LPWSTR>(wName.c_str()),
+                     pDevMode, pDevMode, DM_IN_BUFFER | DM_OUT_BUFFER);
+
+  ClosePrinter(hProbe);
+
+  // Reopen bound to our DEVMODE. OpenPrinter copies the DEVMODE internally,
+  // so it is safe to let devmodeBuf go out of scope afterwards.
+  PRINTER_DEFAULTS defaults{};
+  defaults.pDatatype     = nullptr;
+  defaults.pDevMode      = pDevMode;
+  defaults.DesiredAccess = PRINTER_ACCESS_USE;
+
+  HANDLE hPrinter = nullptr;
+  if (!OpenPrinter(const_cast<LPWSTR>(wName.c_str()), &hPrinter, &defaults)) {
+    // Fall back to a plain open if the DEVMODE-bound open is rejected.
+    return OpenPrinter(const_cast<LPWSTR>(wName.c_str()),
+                       outHandle, nullptr) != 0;
+  }
+  *outHandle = hPrinter;
+  return true;
+}
+
 bool ThermalPrinterFlutterPlugin::PrintBytes(const std::vector<uint8_t>& bytes,
                                              const std::string& printerName) {
   if (bytes.empty()) return false;
@@ -174,19 +240,27 @@ bool ThermalPrinterFlutterPlugin::PrintBytes(const std::vector<uint8_t>& bytes,
   const std::wstring wDocName     = L"ESC/POS Print Job";
 
   HANDLE hPrinter = nullptr;
-  if (!OpenPrinter(const_cast<LPWSTR>(wPrinterName.c_str()),
-                   &hPrinter, nullptr)) {
+  if (!OpenPrinterForRawSingleCopy(wPrinterName, &hPrinter) ||
+      hPrinter == nullptr) {
     return false;
   }
 
-  // RAII-style guard: always close the printer handle on scope exit
+  // RAII-style guard: always close the printer handle on scope exit. If the
+  // job did not complete fully, delete the spool job so the printer never
+  // receives a truncated ESC/POS stream (a partial stream can leave a thermal
+  // printer mid-command and "running away").
   struct PrinterGuard {
     HANDLE h;
+    DWORD  jobId       = 0;
     bool   docStarted  = false;
     bool   pageStarted = false;
+    bool   succeeded   = false;
     ~PrinterGuard() {
       if (pageStarted) EndPagePrinter(h);
       if (docStarted)  EndDocPrinter(h);
+      if (!succeeded && jobId != 0) {
+        SetJob(h, jobId, 0, nullptr, JOB_CONTROL_DELETE);
+      }
       ClosePrinter(h);
     }
   } guard{ hPrinter };
@@ -202,6 +276,7 @@ bool ThermalPrinterFlutterPlugin::PrintBytes(const std::vector<uint8_t>& bytes,
                                 reinterpret_cast<LPBYTE>(&docInfo));
   if (jobId == 0) return false;
   guard.docStarted = true;
+  guard.jobId      = jobId;
 
   if (!StartPagePrinter(hPrinter)) return false;
   guard.pageStarted = true;
@@ -219,15 +294,15 @@ bool ThermalPrinterFlutterPlugin::PrintBytes(const std::vector<uint8_t>& bytes,
                       remaining,
                       &written)
         || written == 0) {
-      // Partial or failed write — abort; guard destructor cleans up
+      // Partial or failed write — abort; guard destructor deletes the job.
       return false;
     }
     src       += written;
     remaining -= written;
   }
 
-  // Explicit success path: mark guard state so destructor runs End* calls
-  // (they were already flagged true above; nothing extra needed).
+  // Mark success so the guard finishes (rather than deletes) the job.
+  guard.succeeded = true;
   return true;
 }
 

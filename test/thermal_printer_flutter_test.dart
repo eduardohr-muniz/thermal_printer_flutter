@@ -14,6 +14,10 @@ class _MockPlatform
   List<int>? lastBytes;
   PrinterType? lastPrinterType;
 
+  /// Hook opcional executado dentro de [printBytes]; permite os testes
+  /// controlarem timing (para validar serialização) e erros.
+  Future<void> Function(List<int> bytes)? onPrintBytes;
+
   @override
   Future<String?> getPlatformVersion() async {
     calls.add('getPlatformVersion');
@@ -51,6 +55,7 @@ class _MockPlatform
     calls.add('printBytes');
     lastBytes = bytes;
     lastPrinter = printer;
+    if (onPrintBytes != null) await onPrintBytes!(bytes);
   }
 
   @override
@@ -159,6 +164,68 @@ void main() {
 
       expect(mock.lastBytes, [1, 2]);
       expect(mock.lastPrinter, printer);
+    });
+
+    test('printBytes default sends the payload exactly once', () async {
+      const printer = Printer(type: PrinterType.usb, name: 'USB');
+      await plugin.printBytes(bytes: const [9, 9], printer: printer);
+
+      expect(mock.lastBytes, [9, 9]);
+    });
+
+    test('printBytes repeats the payload for multiple copies', () async {
+      const printer = Printer(type: PrinterType.usb, name: 'USB');
+      await plugin.printBytes(
+          bytes: const [1, 2, 3], printer: printer, copies: 3);
+
+      // Cópias são montadas no próprio stream (um único job).
+      expect(mock.lastBytes, [1, 2, 3, 1, 2, 3, 1, 2, 3]);
+    });
+
+    test('printBytes asserts copies >= 1', () {
+      const printer = Printer(type: PrinterType.usb, name: 'USB');
+      expect(
+        () => plugin.printBytes(
+            bytes: const [1], printer: printer, copies: 0),
+        throwsA(isA<AssertionError>()),
+      );
+    });
+
+    test('concurrent prints are serialized in call order', () async {
+      final completionOrder = <int>[];
+      mock.onPrintBytes = (bytes) async {
+        final id = bytes.first;
+        // Primeiro job é mais lento que o segundo: se houver sobreposição,
+        // o segundo terminaria antes e a ordem seria [2, 1].
+        await Future<void>.delayed(
+            Duration(milliseconds: id == 1 ? 60 : 10));
+        completionOrder.add(id);
+      };
+
+      const printer = Printer(type: PrinterType.usb, name: 'USB');
+      final f1 = plugin.printBytes(bytes: const [1], printer: printer);
+      final f2 = plugin.printBytes(bytes: const [2], printer: printer);
+      await Future.wait([f1, f2]);
+
+      expect(completionOrder, [1, 2]);
+    });
+
+    test('a failing print does not block subsequent jobs', () async {
+      final completionOrder = <int>[];
+      mock.onPrintBytes = (bytes) async {
+        final id = bytes.first;
+        if (id == 1) throw Exception('boom');
+        completionOrder.add(id);
+      };
+
+      const printer = Printer(type: PrinterType.usb, name: 'USB');
+      final f1 = plugin.printBytes(bytes: const [1], printer: printer);
+      final f2 = plugin.printBytes(bytes: const [2], printer: printer);
+
+      await expectLater(f1, throwsException);
+      await f2;
+
+      expect(completionOrder, [2]);
     });
 
     test('connect forwards the printer', () async {
