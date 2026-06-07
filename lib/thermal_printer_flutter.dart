@@ -1,10 +1,12 @@
 import 'package:flutter/cupertino.dart';
 import 'package:thermal_printer_flutter/src/enums/printer_type.dart';
 import 'package:thermal_printer_flutter/src/models/printer.dart';
+import 'package:thermal_printer_flutter/src/models/printer_status.dart';
 import 'package:thermal_printer_flutter/src/services/screenshot.dart';
 import 'package:thermal_printer_flutter/src/repositories/network_printer_repository.dart';
 import 'thermal_printer_flutter_platform_interface.dart';
 export './src/models/printer.dart';
+export './src/models/printer_status.dart';
 export './src/enums/printer_type.dart';
 export './src/services/screenshot.dart';
 import 'package:image/image.dart' as img;
@@ -96,6 +98,12 @@ class ThermalPrinterFlutter implements ThermalPrinterFlutterPlatform {
   Future<bool> isConnected({required Printer printer}) async {
     return await ThermalPrinterFlutterPlatform.instance
         .isConnected(printer: printer);
+  }
+
+  @override
+  Future<PrinterStatus> getPrinterStatus({required Printer printer}) async {
+    return await ThermalPrinterFlutterPlatform.instance
+        .getPrinterStatus(printer: printer);
   }
 
   /// Renderiza [widget] e retorna a imagem monocromática pronta para impressão.

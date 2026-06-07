@@ -231,6 +231,116 @@ bool ThermalPrinterFlutterPlugin::PrintBytes(const std::vector<uint8_t>& bytes,
   return true;
 }
 
+void ThermalPrinterFlutterPlugin::PopulateDefaultStatus(flutter::EncodableMap& statusMap) const {
+  statusMap[flutter::EncodableValue("hasStatus")] = flutter::EncodableValue(false);
+  statusMap[flutter::EncodableValue("hasError")] = flutter::EncodableValue(false);
+  statusMap[flutter::EncodableValue("isPaperOut")] = flutter::EncodableValue(false);
+  statusMap[flutter::EncodableValue("isPaperJam")] = flutter::EncodableValue(false);
+  statusMap[flutter::EncodableValue("isDoorOpen")] = flutter::EncodableValue(false);
+  statusMap[flutter::EncodableValue("isOffline")] = flutter::EncodableValue(false);
+  statusMap[flutter::EncodableValue("isPaperLow")] = flutter::EncodableValue(false);
+  statusMap[flutter::EncodableValue("needsUserAction")] = flutter::EncodableValue(false);
+  statusMap[flutter::EncodableValue("rawStatus")] = flutter::EncodableValue(0);
+  statusMap[flutter::EncodableValue("description")] = flutter::EncodableValue("");
+}
+
+flutter::EncodableMap ThermalPrinterFlutterPlugin::BuildPrinterStatusMap(const std::string& printerName) {
+  flutter::EncodableMap statusMap;
+  PopulateDefaultStatus(statusMap);
+
+  if (printerName.empty()) {
+    statusMap[flutter::EncodableValue("description")] = flutter::EncodableValue("Printer name cannot be empty.");
+    return statusMap;
+  }
+
+  int wchars_num = MultiByteToWideChar(CP_UTF8, 0, printerName.c_str(), -1, NULL, 0);
+  if (wchars_num == 0) {
+    statusMap[flutter::EncodableValue("description")] = flutter::EncodableValue("Unable to convert printer name to UTF-16.");
+    return statusMap;
+  }
+
+  std::wstring wname(wchars_num, L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, printerName.c_str(), -1, wname.data(), wchars_num);
+
+  HANDLE hPrinter = NULL;
+  if (!OpenPrinter(wname.data(), &hPrinter, NULL)) {
+    DWORD error = GetLastError();
+    std::ostringstream errorStream;
+    errorStream << "Unable to open printer. Error: " << error;
+    statusMap[flutter::EncodableValue("description")] = flutter::EncodableValue(errorStream.str());
+    return statusMap;
+  }
+
+  DWORD needed = 0;
+  GetPrinter(hPrinter, 2, NULL, 0, &needed);
+  if (needed == 0) {
+    ClosePrinter(hPrinter);
+    statusMap[flutter::EncodableValue("description")] = flutter::EncodableValue("Printer status is unavailable.");
+    return statusMap;
+  }
+
+  std::vector<BYTE> buffer(needed);
+  if (!GetPrinter(hPrinter, 2, buffer.data(), needed, &needed)) {
+    DWORD error = GetLastError();
+    ClosePrinter(hPrinter);
+    std::ostringstream errorStream;
+    errorStream << "Failed to query printer information. Error: " << error;
+    statusMap[flutter::EncodableValue("description")] = flutter::EncodableValue(errorStream.str());
+    return statusMap;
+  }
+
+  PRINTER_INFO_2* printerInfo = reinterpret_cast<PRINTER_INFO_2*>(buffer.data());
+  DWORD status = printerInfo->Status;
+  DWORD attributes = printerInfo->Attributes;
+  ClosePrinter(hPrinter);
+
+  statusMap[flutter::EncodableValue("rawStatus")] = flutter::EncodableValue(static_cast<int>(status));
+  statusMap[flutter::EncodableValue("hasStatus")] = flutter::EncodableValue(true);
+
+  auto hasFlag = [&](DWORD flag) -> bool {
+    return (status & flag) != 0;
+  };
+
+  bool isPaperOut = hasFlag(PRINTER_STATUS_PAPER_OUT);
+  bool isPaperJam = hasFlag(PRINTER_STATUS_PAPER_JAM);
+  bool isDoorOpen = hasFlag(PRINTER_STATUS_DOOR_OPEN);
+#ifdef PRINTER_STATUS_PAPER_LOW
+  bool isPaperLow = hasFlag(PRINTER_STATUS_PAPER_LOW);
+#else
+  bool isPaperLow = false;
+#endif
+  bool isOffline = hasFlag(PRINTER_STATUS_OFFLINE) || ((attributes & PRINTER_ATTRIBUTE_WORK_OFFLINE) != 0);
+  bool needsUserAction = hasFlag(PRINTER_STATUS_USER_INTERVENTION) || hasFlag(PRINTER_STATUS_OUT_OF_MEMORY);
+  bool hasError = hasFlag(PRINTER_STATUS_ERROR) || isPaperOut || isPaperJam || isDoorOpen || needsUserAction;
+
+  statusMap[flutter::EncodableValue("hasError")] = flutter::EncodableValue(hasError);
+  statusMap[flutter::EncodableValue("isPaperOut")] = flutter::EncodableValue(isPaperOut);
+  statusMap[flutter::EncodableValue("isPaperJam")] = flutter::EncodableValue(isPaperJam);
+  statusMap[flutter::EncodableValue("isDoorOpen")] = flutter::EncodableValue(isDoorOpen);
+  statusMap[flutter::EncodableValue("isOffline")] = flutter::EncodableValue(isOffline);
+  statusMap[flutter::EncodableValue("isPaperLow")] = flutter::EncodableValue(isPaperLow || isPaperOut);
+  statusMap[flutter::EncodableValue("needsUserAction")] = flutter::EncodableValue(needsUserAction);
+
+  std::ostringstream description;
+  if (hasError) {
+    if (isPaperOut) description << "Sem papel. ";
+    if (isPaperJam) description << "Papel encravado. ";
+    if (isDoorOpen) description << "Tampa aberta. ";
+    if (needsUserAction) description << "Requer intervenção do usuário. ";
+  }
+
+  if (isOffline && !isPaperOut && !isDoorOpen) {
+    description << "Impressora offline. ";
+  }
+
+  if (description.str().empty()) {
+    description << "Impressora pronta.";
+  }
+
+  statusMap[flutter::EncodableValue("description")] = flutter::EncodableValue(description.str());
+  return statusMap;
+}
+
 // ─────────────────────────────────────────────
 // HandleMethodCall — dispatch Flutter MethodChannel calls
 // ─────────────────────────────────────────────
@@ -322,6 +432,32 @@ void ThermalPrinterFlutterPlugin::HandleMethodCall(
       result->Error("print_failed",
                     "Failed to send bytes to printer. Check printer name and connectivity.");
     }
+    return;
+  }
+
+  // ── getPrinterStatus ───────────────────────────────────────────────────
+  // Argument may be a Map {"printerName": String} or a bare String.
+  if (method == "getPrinterStatus") {
+    std::string printerName;
+    if (const auto* args = std::get_if<flutter::EncodableMap>(method_call.arguments())) {
+      const auto it = args->find(flutter::EncodableValue("printerName"));
+      if (it != args->end()) {
+        if (const auto* value = std::get_if<std::string>(&it->second)) {
+          printerName = *value;
+        }
+      }
+    } else if (const auto* directName = std::get_if<std::string>(method_call.arguments())) {
+      printerName = *directName;
+    }
+
+    if (printerName.empty()) {
+      result->Error("invalid_arguments",
+                    "printerName is required for getPrinterStatus");
+      return;
+    }
+
+    auto statusMap = BuildPrinterStatusMap(printerName);
+    result->Success(flutter::EncodableValue(statusMap));
     return;
   }
 

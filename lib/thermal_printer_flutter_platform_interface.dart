@@ -58,4 +58,8 @@ abstract class ThermalPrinterFlutterPlatform extends PlatformInterface {
   Future<bool> isConnected({required Printer printer}) {
     throw UnimplementedError('isConnected() has not been implemented.');
   }
+
+  Future<PrinterStatus> getPrinterStatus({required Printer printer}) {
+    throw UnimplementedError('getPrinterStatus() has not been implemented.');
+  }
 }

@@ -166,4 +166,19 @@ class MethodChannelThermalPrinterFlutter
         return _networkRepository.isConnected(printer);
     }
   }
+
+  @override
+  Future<PrinterStatus> getPrinterStatus({required Printer printer}) async {
+    if (printer.type != PrinterType.usb) return PrinterStatus.unknown;
+
+    try {
+      final Map<dynamic, dynamic>? response = await _channel.invokeMethod<Map<dynamic, dynamic>>(
+        'getPrinterStatus',
+        <String, dynamic>{'printerName': printer.name},
+      );
+      return PrinterStatus.fromMap(response);
+    } catch (_) {
+      return PrinterStatus.unknown;
+    }
+  }
 }

@@ -45,6 +45,12 @@ class ThermalPrinterFlutterPlugin : public flutter::Plugin {
   /// then falls back to EncodableList of int32_t for legacy callers.
   static std::optional<std::vector<uint8_t>>
       ExtractBytes(const flutter::EncodableValue& value);
+
+  /// Build a status map for the named printer (online, paper, errors).
+  flutter::EncodableMap BuildPrinterStatusMap(const std::string& printerName);
+
+  /// Populate a status map with default/unknown values.
+  void PopulateDefaultStatus(flutter::EncodableMap& statusMap) const;
 };
 
 }  // namespace thermal_printer_flutter

@@ -32,6 +32,7 @@ class _MyAppState extends State<MyApp> {
   final _messengerKey = GlobalKey<ScaffoldMessengerState>();
   bool _isDiscovering = false;
   String _discoveryProgress = '';
+  bool _isCheckingStatus = false;
 
   @override
   void initState() {
@@ -433,6 +434,96 @@ class _MyAppState extends State<MyApp> {
     }
   }
 
+  Future<void> _fetchPrinterStatus() async {
+    if (_selectedPrinter == null) {
+      _showBanner('Selecione uma impressora primeiro', isError: true);
+      return;
+    }
+
+    if (_selectedPrinter!.type != PrinterType.usb) {
+      _showBanner('Leitura de status disponível apenas para impressoras USB no Windows', isError: true);
+      return;
+    }
+
+    setState(() {
+      _isCheckingStatus = true;
+    });
+
+    try {
+      final status = await _thermalPrinterFlutterPlugin.getPrinterStatus(printer: _selectedPrinter!);
+      if (!mounted) return;
+
+      await showDialog<void>(
+        context: context,
+        builder: (context) {
+          return AlertDialog(
+            title: Text('Status da impressora\n${_selectedPrinter!.name}', textAlign: TextAlign.center),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildStatusRow('Possui status', status.hasStatus),
+                _buildStatusRow('Erro', status.hasError),
+                _buildStatusRow('Sem papel', status.isPaperOut),
+                _buildStatusRow('Papel travado', status.isPaperJam),
+                _buildStatusRow('Tampa aberta', status.isDoorOpen),
+                _buildStatusRow('Offline', status.isOffline),
+                _buildStatusRow('Pouco papel', status.isPaperLow),
+                _buildStatusRow('Intervenção necessária', status.needsUserAction),
+                const SizedBox(height: 12),
+                Text(
+                  status.description.isEmpty ? 'Sem detalhes adicionais.' : status.description,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Código bruto: ${status.rawStatus}',
+                  style: const TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Fechar'),
+              ),
+            ],
+          );
+        },
+      );
+    } catch (e) {
+      if (!mounted) return;
+      _showBanner('Erro ao consultar status: $e', isError: true);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCheckingStatus = false;
+        });
+      }
+    }
+  }
+
+  Widget _buildStatusRow(String label, bool value) {
+    final color = value ? Colors.red.shade600 : Colors.green.shade600;
+    final text = value ? 'Sim' : 'Não';
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          Expanded(child: Text(label)),
+          Chip(
+            label: Text(
+              text,
+              style: const TextStyle(color: Colors.white),
+            ),
+            backgroundColor: color,
+            visualDensity: VisualDensity.compact,
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -578,8 +669,10 @@ class _MyAppState extends State<MyApp> {
                       ],
                     )
                   else
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
+                    Wrap(
+                      alignment: WrapAlignment.center,
+                      spacing: 10,
+                      runSpacing: 10,
                       children: [
                         ElevatedButton(
                           onPressed: (_selectedPrinter?.isConnected == true ||
@@ -588,7 +681,6 @@ class _MyAppState extends State<MyApp> {
                               : null,
                           child: const Text('Print Test'),
                         ),
-                        const SizedBox(width: 10),
                         ElevatedButton(
                           onPressed: _selectedPrinter?.isConnected == true
                               ? () async {
@@ -614,6 +706,19 @@ class _MyAppState extends State<MyApp> {
                                 }
                               : null,
                           child: const Text('Desconectar'),
+                        ),
+                        ElevatedButton.icon(
+                          onPressed: (_selectedPrinter != null && _selectedPrinter!.type == PrinterType.usb && !_isCheckingStatus)
+                              ? _fetchPrinterStatus
+                              : null,
+                          icon: _isCheckingStatus
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Icon(Icons.info_outline),
+                          label: const Text('Status (USB)'),
                         ),
                       ],
                     ),
