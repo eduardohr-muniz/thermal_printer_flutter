@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:thermal_printer_flutter/thermal_printer_flutter.dart';
@@ -23,7 +21,9 @@ void main() {
 
   setUp(() {
     calls.clear();
-    platform = MethodChannelThermalPrinterFlutter();
+    // Force the non-Windows code paths so the Bluetooth branches run
+    // deterministically regardless of the host OS the tests run on.
+    platform = MethodChannelThermalPrinterFlutter(isWindows: false);
   });
 
   tearDown(() {
@@ -86,7 +86,7 @@ void main() {
 
       expect(await platform.enableBluetooth(), isFalse);
     });
-  }, skip: Platform.isWindows);
+  });
 
   group('getPrinters', () {
     test('usb delegates to usbprinters', () async {
@@ -116,7 +116,7 @@ void main() {
 
       expect(printers.single.type, PrinterType.bluetooth);
       expect(printers.single.name, 'BLE');
-    }, skip: Platform.isWindows);
+    });
 
     test('network returns an empty list', () async {
       mockHandler((_) async => null);
@@ -153,7 +153,7 @@ void main() {
         bytes: [1, 2, 3],
         printer: const Printer(type: PrinterType.bluetooth),
       );
-    }, skip: Platform.isWindows);
+    });
   });
 
   group('connect / disconnect / isConnected', () {
@@ -173,7 +173,7 @@ void main() {
       );
 
       expect(result, isTrue);
-    }, skip: Platform.isWindows);
+    });
 
     test('network connect returns false without an IP', () async {
       mockHandler((_) async => null);
@@ -197,7 +197,7 @@ void main() {
           printer: const Printer(type: PrinterType.bluetooth));
 
       expect(calls.map((c) => c.method), contains('disconnect'));
-    }, skip: Platform.isWindows);
+    });
 
     test('network disconnect is a no-op for unknown printers', () async {
       mockHandler((_) async => null);
@@ -229,7 +229,7 @@ void main() {
                 const Printer(type: PrinterType.bluetooth, bleAddress: 'b1')),
         isTrue,
       );
-    }, skip: Platform.isWindows);
+    });
 
     test('network isConnected returns false when not connected', () async {
       mockHandler((_) async => null);
@@ -238,6 +238,103 @@ void main() {
         await platform.isConnected(
             printer: const Printer(type: PrinterType.network, ip: '1.2.3.4')),
         isFalse,
+      );
+    });
+  });
+
+  group('getPrinterStatus', () {
+    test('returns unknown for non-usb printers without a channel call',
+        () async {
+      mockHandler((_) async => null);
+
+      final status = await platform.getPrinterStatus(
+          printer: const Printer(type: PrinterType.network));
+
+      expect(status.hasStatus, isFalse);
+      expect(calls, isEmpty);
+    });
+
+    test('usb maps the channel response', () async {
+      mockHandler((call) async {
+        expect(call.method, 'getPrinterStatus');
+        expect((call.arguments as Map)['printerName'], 'USB');
+        return <String, dynamic>{
+          'hasStatus': true,
+          'description': 'Ready',
+          'rawStatus': 0,
+        };
+      });
+
+      final status = await platform.getPrinterStatus(
+          printer: const Printer(type: PrinterType.usb, name: 'USB'));
+
+      expect(status.hasStatus, isTrue);
+      expect(status.description, 'Ready');
+    });
+
+    test('usb returns unknown when the channel throws', () async {
+      mockHandler((_) async => throw PlatformException(code: 'ERR'));
+
+      final status = await platform.getPrinterStatus(
+          printer: const Printer(type: PrinterType.usb, name: 'USB'));
+
+      expect(status.hasStatus, isFalse);
+    });
+  });
+
+  group('Windows blocks Bluetooth', () {
+    late MethodChannelThermalPrinterFlutter win;
+
+    setUp(() {
+      win = MethodChannelThermalPrinterFlutter(isWindows: true);
+    });
+
+    test('checkBluetoothPermissions throws', () {
+      expect(win.checkBluetoothPermissions, throwsUnimplementedError);
+    });
+
+    test('isBluetoothEnabled throws', () {
+      expect(win.isBluetoothEnabled, throwsUnimplementedError);
+    });
+
+    test('enableBluetooth throws', () {
+      expect(win.enableBluetooth, throwsUnimplementedError);
+    });
+
+    test('getPrinters(bluetooth) throws', () {
+      expect(() => win.getPrinters(printerType: PrinterType.bluetooth),
+          throwsUnimplementedError);
+    });
+
+    test('printBytes(bluetooth) throws', () {
+      expect(
+        () => win.printBytes(
+            bytes: const [1],
+            printer: const Printer(type: PrinterType.bluetooth)),
+        throwsUnimplementedError,
+      );
+    });
+
+    test('connect(bluetooth) throws', () {
+      expect(
+        () => win.connect(printer: const Printer(type: PrinterType.bluetooth)),
+        throwsUnimplementedError,
+      );
+    });
+
+    test('disconnect(bluetooth) throws', () {
+      expect(
+        () =>
+            win.disconnect(printer: const Printer(type: PrinterType.bluetooth)),
+        throwsUnimplementedError,
+      );
+    });
+
+    test('isConnected(bluetooth) throws', () {
+      expect(
+        () => win.isConnected(
+            printer: const Printer(type: PrinterType.bluetooth)),
+        throwsUnimplementedError,
       );
     });
   });

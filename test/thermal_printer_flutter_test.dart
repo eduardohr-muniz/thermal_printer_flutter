@@ -117,6 +117,10 @@ void main() {
       expect(
           () => base.isConnected(printer: const Printer(type: PrinterType.usb)),
           throwsUnimplementedError);
+      expect(
+          () => base.getPrinterStatus(
+              printer: const Printer(type: PrinterType.usb)),
+          throwsUnimplementedError);
     });
   });
 
@@ -244,6 +248,14 @@ void main() {
     test('isConnected forwards the printer', () async {
       const printer = Printer(type: PrinterType.bluetooth, bleAddress: 'b1');
       expect(await plugin.isConnected(printer: printer), isTrue);
+      expect(mock.lastPrinter, printer);
+    });
+
+    test('getPrinterStatus forwards the printer', () async {
+      const printer = Printer(type: PrinterType.usb, name: 'USB');
+      final status = await plugin.getPrinterStatus(printer: printer);
+      expect(status, isA<PrinterStatus>());
+      expect(mock.calls, contains('getPrinterStatus'));
       expect(mock.lastPrinter, printer);
     });
 
