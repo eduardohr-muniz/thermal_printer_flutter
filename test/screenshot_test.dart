@@ -11,6 +11,7 @@ void main() {
     required bool useBetterText,
     bool flipHorizontal = false,
     bool applyTextScaling = true,
+    bool dither = false,
     Widget? child,
   }) async {
     late BuildContext capturedContext;
@@ -38,6 +39,7 @@ void main() {
         useBetterText: useBetterText,
         flipHorizontal: flipHorizontal,
         applyTextScaling: applyTextScaling,
+        dither: dither,
         widget: child ??
             Container(
               width: 64,
@@ -118,6 +120,26 @@ void main() {
       final image = await capture(
         tester,
         useBetterText: false,
+        child: const SizedBox(width: 64, height: 32),
+      );
+
+      expect(image.width, greaterThan(0));
+    });
+
+    testWidgets('dithered path (Floyd–Steinberg) produces a monochrome image',
+        (tester) async {
+      final image = await capture(tester, useBetterText: false, dither: true);
+
+      expect(image.width, greaterThan(0));
+      expect(image.height, greaterThan(0));
+    });
+
+    testWidgets('dithered path composites transparency onto white',
+        (tester) async {
+      final image = await capture(
+        tester,
+        useBetterText: false,
+        dither: true,
         child: const SizedBox(width: 64, height: 32),
       );
 

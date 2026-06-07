@@ -10,6 +10,8 @@
 - Fixed runaway/multiple-copies on Windows: the spooler now uses `RAW` datatype **and** forces `dmCopies = 1`, so a driver "Copies" default can no longer multiply RAW jobs. Partial/aborted jobs are deleted from the spooler instead of being sent truncated.
 - Byte payloads are now sent as `Uint8List` across all platforms
 - Fixed `flipHorizontal` on `screenShotWidget`: it was accepted but never applied; the captured image is now actually mirrored.
+- Improved image print quality: `screenShotWidget` now downsamples with area-average interpolation and applies Floyd–Steinberg dithering by default (`dither: true`), greatly improving logos/photos/grayscale on 1-bit thermal printers. Pass `dither: false` for the previous threshold-only path (sharper for pure text).
+- Changed the default `screenShotWidget` `width` from `550` to `576` (80 mm @ 203 dpi, a multiple of 8) so the bitmap matches the printer head without rescaling. Use `384` for 58 mm.
 - Hardened Bluetooth printer parsing: a malformed paired-device string no longer drops the whole list (`RangeError`).
 - `BluetoothPrinterRepository` reconnect delay is now configurable (was a hardcoded 500 ms).
 - Network discovery now only auto-detects genuinely private subnets (correct `172.16.0.0/12` range) and prunes dead pooled connections.

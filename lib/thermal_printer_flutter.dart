@@ -180,12 +180,13 @@ class ThermalPrinterFlutter implements ThermalPrinterFlutterPlatform {
     BuildContext context, {
     required Widget widget,
     double pixelRatio = 3.0,
-    int width = 550,
+    int width = 576, // 80 mm @ 203 dpi (múltiplo de 8). Use 384 p/ 58 mm.
     int threshold = 160,
     bool flipHorizontal = false,
     bool applyTextScaling = true,
     bool useBetterText = true,
     double textScaleFactor = 1.3,
+    bool dither = true,
   }) async {
     return await ThermalScreenshot.captureWidgetAsMonochromeImage(context,
         widget: widget,
@@ -195,6 +196,7 @@ class ThermalPrinterFlutter implements ThermalPrinterFlutterPlatform {
         width: width,
         applyTextScaling: applyTextScaling,
         useBetterText: useBetterText,
-        textScaleFactor: textScaleFactor);
+        textScaleFactor: textScaleFactor,
+        dither: dither);
   }
 }

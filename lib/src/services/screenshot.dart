@@ -13,12 +13,13 @@ class ThermalScreenshot {
     BuildContext context, {
     required Widget widget,
     double pixelRatio = 3.0, // Reduzido para melhor performance
-    int width = 550,
+    int width = 576, // 80 mm @ 203 dpi (múltiplo de 8). Use 384 p/ 58 mm.
     int threshold = 160,
     bool flipHorizontal = false,
     bool applyTextScaling = true,
     bool useBetterText = true,
     double textScaleFactor = 1.3,
+    bool dither = true,
   }) async {
     final globalKey = GlobalKey();
     final completer = Completer<img.Image>();
@@ -73,12 +74,18 @@ class ThermalScreenshot {
         final Uint8List rgbaBytes = byteData.buffer.asUint8List();
         final int newWidth = (width % 8 != 0) ? ((width ~/ 8) * 8) : width;
 
-        // Conversão direta para imagem monocromática
-        var monoImage = useBetterText
-            ? _convertTextOptimizedMonochrome(
+        // Conversão direta para imagem monocromática.
+        // `dither` usa reamostragem por média + Floyd–Steinberg (melhor para
+        // logos/fotos/tons de cinza). Caso contrário usa o caminho de
+        // limiar (melhor para texto puro).
+        var monoImage = dither
+            ? _convertWithDithering(
                 rgbaBytes, image.width, image.height, newWidth, threshold)
-            : _convertRgbaToMonochromeFast(
-                rgbaBytes, image.width, image.height, newWidth, threshold);
+            : useBetterText
+                ? _convertTextOptimizedMonochrome(
+                    rgbaBytes, image.width, image.height, newWidth, threshold)
+                : _convertRgbaToMonochromeFast(
+                    rgbaBytes, image.width, image.height, newWidth, threshold);
 
         // Espelha horizontalmente quando solicitado (algumas impressoras
         // térmicas/refletivas exigem a imagem invertida).
@@ -216,6 +223,63 @@ class ThermalScreenshot {
 
         final color = luminance > threshold ? 255 : 0;
         monoImage.setPixel(x, y, img.ColorRgb8(color, color, color));
+      }
+    }
+    return monoImage;
+  }
+
+  /// Conversão de alta qualidade: reamostra por **média de área** (em vez de
+  /// vizinho-mais-próximo) e aplica **dithering Floyd–Steinberg** para 1-bit.
+  ///
+  /// Indicado para logos/fotos/gradientes, onde o limiar simples perde
+  /// detalhe. Pixels transparentes são compostos sobre fundo branco.
+  static img.Image _convertWithDithering(Uint8List rgbaBytes, int srcWidth,
+      int srcHeight, int dstWidth, int threshold) {
+    // Envolve os bytes RGBA crus e reduz com interpolação por média.
+    final src = img.Image.fromBytes(
+      width: srcWidth,
+      height: srcHeight,
+      bytes: rgbaBytes.buffer,
+      numChannels: 4,
+    );
+    final dstHeight = (srcHeight * (dstWidth / srcWidth)).round();
+    final resized = img.copyResize(
+      src,
+      width: dstWidth,
+      height: dstHeight,
+      interpolation: img.Interpolation.average,
+    );
+
+    // Buffer de luminância (compondo a transparência sobre branco).
+    final gray = List<double>.filled(dstWidth * dstHeight, 0);
+    for (int y = 0; y < dstHeight; y++) {
+      for (int x = 0; x < dstWidth; x++) {
+        final p = resized.getPixel(x, y);
+        final a = p.a / 255.0;
+        final r = p.r * a + 255 * (1 - a);
+        final g = p.g * a + 255 * (1 - a);
+        final b = p.b * a + 255 * (1 - a);
+        gray[y * dstWidth + x] = 0.299 * r + 0.587 * g + 0.114 * b;
+      }
+    }
+
+    // Difusão de erro Floyd–Steinberg.
+    final monoImage = img.Image(width: dstWidth, height: dstHeight);
+    for (int y = 0; y < dstHeight; y++) {
+      for (int x = 0; x < dstWidth; x++) {
+        final i = y * dstWidth + x;
+        final oldVal = gray[i];
+        final newVal = oldVal < threshold ? 0.0 : 255.0;
+        final err = oldVal - newVal;
+        final c = newVal.toInt();
+        monoImage.setPixel(x, y, img.ColorRgb8(c, c, c));
+
+        if (x + 1 < dstWidth) gray[i + 1] += err * 7 / 16;
+        if (y + 1 < dstHeight) {
+          if (x > 0) gray[i + dstWidth - 1] += err * 3 / 16;
+          gray[i + dstWidth] += err * 5 / 16;
+          if (x + 1 < dstWidth) gray[i + dstWidth + 1] += err * 1 / 16;
+        }
       }
     }
     return monoImage;
