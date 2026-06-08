@@ -13,17 +13,6 @@ Flutter plugin for ESC/POS thermal printing over **USB**, **Bluetooth (BLE)** an
 | Linux    | ❌  | ❌        | ✅      |
 | Web      | ❌  | ❌        | 🚧      |
 
-## Install
-
-```yaml
-dependencies:
-  thermal_printer_flutter: ^0.1.0
-```
-
-```dart
-import 'package:thermal_printer_flutter/thermal_printer_flutter.dart';
-```
-
 ## Permissions & setup per platform
 
 ### Android
