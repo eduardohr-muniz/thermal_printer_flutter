@@ -209,7 +209,10 @@ public class SwiftThermalPrinterFlutterPlugin: NSObject, CBCentralManagerDelegat
                 return
             }
             let end = min(pendingWriteOffset + maxLen, data.count)
-            let chunk = data[pendingWriteOffset..<end]
+            // subdata(in:) copies into a zero-based Data; a bare `data[range]`
+            // slice keeps the parent's indices and is mis-sent by CoreBluetooth
+            // (corrupting chunks after the first). Matches the PR's `Array(...)`.
+            let chunk = data.subdata(in: pendingWriteOffset..<end)
             pendingWriteOffset = end
             peripheral.writeValue(chunk, for: characteristic, type: .withResponse)
         } else {
@@ -219,7 +222,10 @@ public class SwiftThermalPrinterFlutterPlugin: NSObject, CBCentralManagerDelegat
                     return
                 }
                 let end = min(pendingWriteOffset + maxLen, data.count)
-                let chunk = data[pendingWriteOffset..<end]
+                // subdata(in:) copies into a zero-based Data; a bare `data[range]`
+            // slice keeps the parent's indices and is mis-sent by CoreBluetooth
+            // (corrupting chunks after the first). Matches the PR's `Array(...)`.
+            let chunk = data.subdata(in: pendingWriteOffset..<end)
                 pendingWriteOffset = end
                 peripheral.writeValue(chunk, for: characteristic, type: .withoutResponse)
             }
