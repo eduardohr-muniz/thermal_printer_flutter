@@ -9,6 +9,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -23,9 +25,11 @@ import io.flutter.plugin.common.PluginRegistry
 import java.io.IOException
 import java.io.OutputStream
 import java.util.UUID
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 private const val TAG = "THERMAL_PRINTER_FLUTTER"
-private const val SPP_UUID = "00001101-0000-1000-8000-00805F9B34FB"
+private val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
 private const val BLUETOOTH_PERMISSION_REQUEST_CODE = 1
 private const val BLUETOOTH_ENABLE_REQUEST_CODE = 2
 
@@ -43,7 +47,19 @@ internal fun decodeBytes(arguments: Any?): ByteArray? = when (arguments) {
     else -> null
 }
 
-/** Flutter plugin for thermal printer communication over Bluetooth SPP on Android. */
+/**
+ * Flutter plugin for thermal printer communication over Bluetooth SPP on Android.
+ *
+ * Threading model (the reason for this rewrite): every blocking Bluetooth IO —
+ * connect, write and disconnect — runs on a single background executor, never on
+ * the platform/UI thread. Results are posted back to the main thread via
+ * [MainThreadResult]. The previous implementation connected and wrote on the
+ * platform thread, freezing the Flutter UI for the whole transmission (the
+ * perceived "slow" printing, especially with raster images).
+ *
+ * Because all access to [connection] is serialized through [ioExecutor], writes
+ * never interleave and there are no socket races.
+ */
 class ThermalPrinterFlutterPlugin :
     FlutterPlugin,
     MethodCallHandler,
@@ -54,9 +70,19 @@ class ThermalPrinterFlutterPlugin :
     private lateinit var context: Context
     private lateinit var channel: MethodChannel
 
-    private var bluetoothSocket: BluetoothSocket? = null
-    private var outputStream: OutputStream? = null
     private var activity: Activity? = null
+
+    /// Single live connection. Written/read only from [ioExecutor]; marked
+    /// volatile so the cheap `isConnected` read on the platform thread is safe.
+    @Volatile
+    private var connection: BluetoothConnection? = null
+
+    /// Serializes all blocking Bluetooth IO off the platform thread.
+    private val ioExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+
+    /// Lazy so constructing the plugin in a plain JVM unit test (no Android
+    /// Looper) doesn't touch `Looper.getMainLooper()`.
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
 
     /// Pending result for async permission request (answered exactly once).
     private var pendingPermissionResult: Result? = null
@@ -74,7 +100,8 @@ class ThermalPrinterFlutterPlugin :
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel.setMethodCallHandler(null)
-        closeConnection()
+        ioExecutor.execute { closeConnectionInternal() }
+        ioExecutor.shutdown()
     }
 
     // ── MethodCallHandler ──────────────────────────────────────────────────────
@@ -105,35 +132,89 @@ class ThermalPrinterFlutterPlugin :
         result.success(buildPairedDeviceMaps())
     }
 
-    private fun handleConnect(call: MethodCall, result: Result) {
+    private fun handleConnect(call: MethodCall, rawResult: Result) {
         if (!checkBluetoothPermission()) {
-            result.error("PERMISSION_DENIED", "Bluetooth permission not granted", null)
+            rawResult.error("PERMISSION_DENIED", "Bluetooth permission not granted", null)
             return
         }
         val macAddress = call.arguments as? String
         if (macAddress.isNullOrBlank()) {
-            result.error("INVALID_ARGUMENT", "MAC address is required", null)
+            rawResult.error("INVALID_ARGUMENT", "MAC address is required", null)
             return
         }
-        connectToDevice(macAddress, result)
+        val adapter = bluetoothAdapter()
+        if (adapter == null || !adapter.isEnabled) {
+            rawResult.error("BLUETOOTH_DISABLED", "Bluetooth is not enabled", null)
+            return
+        }
+
+        val result = MainThreadResult(rawResult)
+        ioExecutor.execute {
+            // Drop any previous connection before opening a new one.
+            closeConnectionInternal()
+            try {
+                val device = adapter.getRemoteDevice(macAddress)
+                // Discovery is heavy and slows down / breaks an active connect.
+                adapter.cancelDiscovery()
+                val socket = device.createRfcommSocketToServiceRecord(SPP_UUID)
+                socket.connect()
+                connection = BluetoothConnection(socket)
+                result.success(true)
+            } catch (e: IllegalArgumentException) {
+                Log.e(TAG, "Invalid MAC address: $macAddress")
+                closeConnectionInternal()
+                result.error("INVALID_ARGUMENT", "Invalid MAC address: $macAddress", null)
+            } catch (e: IOException) {
+                Log.e(TAG, "Connection failed: ${e.message}")
+                closeConnectionInternal()
+                result.error("CONNECTION_ERROR", e.message ?: "IO error during connect", null)
+            } catch (e: SecurityException) {
+                Log.e(TAG, "Missing Bluetooth permission: ${e.message}")
+                closeConnectionInternal()
+                result.error("PERMISSION_DENIED", e.message ?: "Bluetooth permission denied", null)
+            }
+        }
     }
 
-    private fun handleWriteBytes(call: MethodCall, result: Result) {
+    private fun handleWriteBytes(call: MethodCall, rawResult: Result) {
         if (!checkBluetoothPermission()) {
-            result.error("PERMISSION_DENIED", "Bluetooth permission not granted", null)
+            rawResult.error("PERMISSION_DENIED", "Bluetooth permission not granted", null)
             return
         }
         val bytes = decodeBytes(call.arguments)
         if (bytes == null) {
-            result.error("INVALID_ARGUMENT", "Bytes argument must be Uint8List or List<Int>", null)
+            rawResult.error("INVALID_ARGUMENT", "Bytes argument must be Uint8List or List<Int>", null)
             return
         }
-        writeBytes(bytes, result)
+        if (connection == null) {
+            rawResult.error("NOT_CONNECTED", "Not connected to any device", null)
+            return
+        }
+
+        val result = MainThreadResult(rawResult)
+        ioExecutor.execute {
+            val conn = connection
+            if (conn == null) {
+                result.error("NOT_CONNECTED", "Not connected to any device", null)
+                return@execute
+            }
+            try {
+                conn.write(bytes)
+                result.success(true)
+            } catch (e: IOException) {
+                Log.e(TAG, "Write failed: ${e.message}")
+                closeConnectionInternal()
+                result.error("WRITE_ERROR", e.message ?: "IO error during write", null)
+            }
+        }
     }
 
-    private fun handleDisconnect(result: Result) {
-        closeConnection()
-        result.success(true)
+    private fun handleDisconnect(rawResult: Result) {
+        val result = MainThreadResult(rawResult)
+        ioExecutor.execute {
+            closeConnectionInternal()
+            result.success(true)
+        }
     }
 
     private fun handleIsConnected(call: MethodCall, result: Result) {
@@ -142,7 +223,7 @@ class ThermalPrinterFlutterPlugin :
             result.error("INVALID_ARGUMENT", "MAC address is required", null)
             return
         }
-        result.success(bluetoothSocket?.isConnected == true && outputStream != null)
+        result.success(connection?.isConnected == true)
     }
 
     // ── Bluetooth helpers ──────────────────────────────────────────────────────
@@ -163,65 +244,62 @@ class ThermalPrinterFlutterPlugin :
         "type" to PRINTER_TYPE_BLUETOOTH
     )
 
-    private fun connectToDevice(macAddress: String, result: Result) {
-        val adapter = bluetoothAdapter()
-        if (adapter == null || !adapter.isEnabled) {
-            result.error("BLUETOOTH_DISABLED", "Bluetooth is not enabled", null)
-            return
+    /// Closes and clears the active connection. Must run on [ioExecutor].
+    private fun closeConnectionInternal() {
+        connection?.close()
+        connection = null
+    }
+
+    /**
+     * Holds an open RFCOMM socket and streams bytes to the printer.
+     *
+     * The write path is byte-for-byte identical to blue_thermal_printer's
+     * `ConnectedThread`: the whole payload goes out in a single
+     * `outputStream.write(bytes)` on the raw (unbuffered) socket stream — no
+     * chunking, no per-write flush. Splitting into chunks forces extra RFCOMM
+     * packets and was the source of the slower, non-identical behaviour.
+     *
+     * The read loop from blue_thermal_printer is intentionally omitted: the
+     * Dart API never reads back from the printer.
+     */
+    private class BluetoothConnection(private val socket: BluetoothSocket) {
+        private val output: OutputStream = socket.outputStream
+
+        val isConnected: Boolean
+            get() = socket.isConnected
+
+        fun write(bytes: ByteArray) {
+            output.write(bytes)
         }
 
-        closeConnection()
-
-        try {
-            val device = adapter.getRemoteDevice(macAddress)
-            adapter.cancelDiscovery()
-            val socket = device.createRfcommSocketToServiceRecord(UUID.fromString(SPP_UUID))
-            socket.connect()
-            bluetoothSocket = socket
-            outputStream = socket.outputStream
-            result.success(true)
-        } catch (e: IOException) {
-            Log.e(TAG, "Connection failed: ${e.message}")
-            closeConnection()
-            result.error("CONNECTION_ERROR", e.message ?: "IO error during connect", null)
-        } catch (e: IllegalArgumentException) {
-            Log.e(TAG, "Invalid MAC address: $macAddress")
-            result.error("INVALID_ARGUMENT", "Invalid MAC address: $macAddress", null)
+        fun close() {
+            try {
+                output.flush()
+                output.close()
+            } catch (e: IOException) {
+                Log.w(TAG, "Error closing output stream: ${e.message}")
+            }
+            try {
+                socket.close()
+            } catch (e: IOException) {
+                Log.w(TAG, "Error closing socket: ${e.message}")
+            }
         }
     }
 
-    private fun writeBytes(bytes: ByteArray, result: Result) {
-        val stream = outputStream
-        if (stream == null) {
-            result.error("NOT_CONNECTED", "Not connected to any device", null)
-            return
+    /// Wraps a [Result] so it is always answered on the main thread, even when
+    /// completed from [ioExecutor].
+    private inner class MainThreadResult(private val delegate: Result) : Result {
+        override fun success(value: Any?) {
+            mainHandler.post { delegate.success(value) }
         }
-        try {
-            stream.write(bytes)
-            stream.flush()
-            result.success(true)
-        } catch (e: IOException) {
-            Log.e(TAG, "Write failed: ${e.message}")
-            closeConnection()
-            result.error("WRITE_ERROR", e.message ?: "IO error during write", null)
-        }
-    }
 
-    /// Closes the output stream and socket safely, clearing both references.
-    private fun closeConnection() {
-        try {
-            outputStream?.close()
-        } catch (e: IOException) {
-            Log.w(TAG, "Error closing output stream: ${e.message}")
-        } finally {
-            outputStream = null
+        override fun error(code: String, message: String?, details: Any?) {
+            mainHandler.post { delegate.error(code, message, details) }
         }
-        try {
-            bluetoothSocket?.close()
-        } catch (e: IOException) {
-            Log.w(TAG, "Error closing socket: ${e.message}")
-        } finally {
-            bluetoothSocket = null
+
+        override fun notImplemented() {
+            mainHandler.post { delegate.notImplemented() }
         }
     }
 
