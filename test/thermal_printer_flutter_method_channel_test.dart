@@ -21,9 +21,7 @@ void main() {
 
   setUp(() {
     calls.clear();
-    // Force the non-Windows code paths so the Bluetooth branches run
-    // deterministically regardless of the host OS the tests run on.
-    platform = MethodChannelThermalPrinterFlutter(isWindows: false);
+    platform = MethodChannelThermalPrinterFlutter();
   });
 
   tearDown(() {
@@ -288,60 +286,7 @@ void main() {
     });
   });
 
-  group('Windows blocks Bluetooth', () {
-    late MethodChannelThermalPrinterFlutter win;
-
-    setUp(() {
-      win = MethodChannelThermalPrinterFlutter(isWindows: true);
-    });
-
-    test('checkBluetoothPermissions throws', () {
-      expect(win.checkBluetoothPermissions, throwsUnimplementedError);
-    });
-
-    test('isBluetoothEnabled throws', () {
-      expect(win.isBluetoothEnabled, throwsUnimplementedError);
-    });
-
-    test('enableBluetooth throws', () {
-      expect(win.enableBluetooth, throwsUnimplementedError);
-    });
-
-    test('getPrinters(bluetooth) throws', () {
-      expect(() => win.getPrinters(printerType: PrinterType.bluetooth),
-          throwsUnimplementedError);
-    });
-
-    test('printBytes(bluetooth) throws', () {
-      expect(
-        () => win.printBytes(
-            bytes: const [1],
-            printer: const Printer(type: PrinterType.bluetooth)),
-        throwsUnimplementedError,
-      );
-    });
-
-    test('connect(bluetooth) throws', () {
-      expect(
-        () => win.connect(printer: const Printer(type: PrinterType.bluetooth)),
-        throwsUnimplementedError,
-      );
-    });
-
-    test('disconnect(bluetooth) throws', () {
-      expect(
-        () =>
-            win.disconnect(printer: const Printer(type: PrinterType.bluetooth)),
-        throwsUnimplementedError,
-      );
-    });
-
-    test('isConnected(bluetooth) throws', () {
-      expect(
-        () => win.isConnected(
-            printer: const Printer(type: PrinterType.bluetooth)),
-        throwsUnimplementedError,
-      );
-    });
-  });
+  // Bluetooth is now routed uniformly on every platform (including Windows,
+  // which gained a native RFCOMM implementation). The delegation tests above
+  // cover the single code path; there is no longer a Windows-specific block.
 }

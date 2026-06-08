@@ -235,40 +235,9 @@ void main() {
       expect(MethodChannelThermalPrinterFlutter(), isNotNull);
     });
 
-    group('on Windows Bluetooth is unsupported', () {
-      final mc = MethodChannelThermalPrinterFlutter(isWindows: true);
-      final ble = Printer(type: PrinterType.bluetooth, bleAddress: 'x');
-
-      test('checkBluetoothPermissions throws',
-          () => expect(mc.checkBluetoothPermissions(),
-              throwsA(isA<UnimplementedError>())));
-      test('isBluetoothEnabled throws',
-          () => expect(
-              mc.isBluetoothEnabled(), throwsA(isA<UnimplementedError>())));
-      test('enableBluetooth throws',
-          () => expect(
-              mc.enableBluetooth(), throwsA(isA<UnimplementedError>())));
-      test('getPrinters(bluetooth) throws',
-          () => expect(mc.getPrinters(printerType: PrinterType.bluetooth),
-              throwsA(isA<UnimplementedError>())));
-      test('printBytes(bluetooth) throws',
-          () => expect(mc.printBytes(bytes: const [1], printer: ble),
-              throwsA(isA<UnimplementedError>())));
-      test('connect(bluetooth) throws',
-          () => expect(mc.connect(printer: ble),
-              throwsA(isA<UnimplementedError>())));
-      test('disconnect(bluetooth) throws',
-          () => expect(mc.disconnect(printer: ble),
-              throwsA(isA<UnimplementedError>())));
-      test('isConnected(bluetooth) throws',
-          () => expect(mc.isConnected(printer: ble),
-              throwsA(isA<UnimplementedError>())));
-    });
-
     test('printBytes delegates network printers to the repository', () async {
       final socket = buildSocket();
       final mc = MethodChannelThermalPrinterFlutter(
-        isWindows: false,
         networkRepository:
             NetworkPrinterRepository(connector: connectorTo(socket)),
       );

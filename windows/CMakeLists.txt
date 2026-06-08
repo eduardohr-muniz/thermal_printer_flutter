@@ -40,13 +40,19 @@ apply_standard_settings(${PLUGIN_NAME})
 # exported should be explicitly exported with the FLUTTER_PLUGIN_EXPORT macro.
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   CXX_VISIBILITY_PRESET hidden)
-target_compile_definitions(${PLUGIN_NAME} PRIVATE FLUTTER_PLUGIN_IMPL)
+# WIN32_LEAN_AND_MEAN stops <windows.h> from pulling in the legacy winsock.h,
+# which would clash with the <winsock2.h>/<ws2bth.h> we include for Bluetooth
+# (C2375 "different linkage" on the WSA* functions) depending on include order.
+target_compile_definitions(${PLUGIN_NAME} PRIVATE FLUTTER_PLUGIN_IMPL WIN32_LEAN_AND_MEAN)
 
 # Source include directories and library dependencies. Add any plugin-specific
 # dependencies here.
 target_include_directories(${PLUGIN_NAME} INTERFACE
   "${CMAKE_CURRENT_SOURCE_DIR}/include")
-target_link_libraries(${PLUGIN_NAME} PRIVATE flutter flutter_wrapper_plugin)
+# winspool: print spooler (USB). ws2_32 + Bthprops: Bluetooth RFCOMM over
+# Winsock (AF_BTH) and paired-device enumeration (BluetoothFindFirstDevice).
+target_link_libraries(${PLUGIN_NAME} PRIVATE
+  flutter flutter_wrapper_plugin winspool ws2_32 Bthprops)
 
 # List of absolute paths to libraries that should be bundled with the plugin.
 # This list could contain prebuilt libraries, or libraries created by an
@@ -85,8 +91,14 @@ add_executable(${TEST_RUNNER}
   ${PLUGIN_SOURCES}
 )
 apply_standard_settings(${TEST_RUNNER})
+# Same winsock1/winsock2 guard as the plugin target (the test compiles the
+# plugin sources directly and includes <windows.h> before the plugin header).
+target_compile_definitions(${TEST_RUNNER} PRIVATE WIN32_LEAN_AND_MEAN)
 target_include_directories(${TEST_RUNNER} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(${TEST_RUNNER} PRIVATE flutter_wrapper_plugin)
+# The test binary compiles the plugin sources directly, so it needs the same
+# system libraries (spooler + Bluetooth) the plugin links against.
+target_link_libraries(${TEST_RUNNER} PRIVATE winspool ws2_32 Bthprops)
 target_link_libraries(${TEST_RUNNER} PRIVATE gtest_main gmock)
 # flutter_wrapper_plugin has link dependencies on the Flutter DLL.
 add_custom_command(TARGET ${TEST_RUNNER} POST_BUILD

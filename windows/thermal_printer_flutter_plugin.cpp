@@ -1,7 +1,12 @@
+// thermal_printer_flutter_plugin.h includes <winsock2.h> first, which must
+// precede <windows.h> (pulled in by the headers below) to avoid winsock1
+// redefinition errors.
 #include "thermal_printer_flutter_plugin.h"
 
 // Windows system headers
+#include <ws2bth.h>          // SOCKADDR_BTH, AF_BTH, BTHPROTO_RFCOMM
 #include <windows.h>
+#include <bluetoothapis.h>   // BluetoothFindFirstDevice / Radio
 #include <winspool.h>
 #include <VersionHelpers.h>
 
@@ -11,6 +16,8 @@
 #include <flutter/standard_method_codec.h>
 #include <flutter/encodable_value.h>
 
+#include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -45,7 +52,14 @@ void ThermalPrinterFlutterPlugin::RegisterWithRegistrar(
 // ─────────────────────────────────────────────
 
 ThermalPrinterFlutterPlugin::ThermalPrinterFlutterPlugin() {}
-ThermalPrinterFlutterPlugin::~ThermalPrinterFlutterPlugin() {}
+
+ThermalPrinterFlutterPlugin::~ThermalPrinterFlutterPlugin() {
+  BluetoothDisconnect();
+  if (wsa_started_) {
+    WSACleanup();
+    wsa_started_ = false;
+  }
+}
 
 // ─────────────────────────────────────────────
 // Helper: UTF-8 -> wide string (safe, no raw new[])
@@ -417,6 +431,215 @@ flutter::EncodableMap ThermalPrinterFlutterPlugin::BuildPrinterStatusMap(const s
 }
 
 // ─────────────────────────────────────────────
+// Bluetooth (RFCOMM / SPP over Winsock)
+//
+// Mirrors the Android path: enumerate paired devices, connect to the SPP
+// service by address, stream raw ESC/POS bytes over an RFCOMM socket. One
+// connection at a time; all calls run synchronously on the platform thread
+// (Flutter Windows requires MethodResult to be answered there).
+// ─────────────────────────────────────────────
+
+bool ThermalPrinterFlutterPlugin::EnsureWinsock() {
+  if (wsa_started_) return true;
+  WSADATA wsaData;
+  if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+    return false;
+  }
+  wsa_started_ = true;
+  return true;
+}
+
+// static
+std::string ThermalPrinterFlutterPlugin::FormatBluetoothAddress(
+    unsigned long long addr) {
+  // The address occupies the low 48 bits, most-significant byte first.
+  unsigned int b[6];
+  for (int i = 0; i < 6; ++i) {
+    b[i] = static_cast<unsigned int>((addr >> (8 * (5 - i))) & 0xFF);
+  }
+  char buf[18];
+  std::snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X",
+                b[0], b[1], b[2], b[3], b[4], b[5]);
+  return std::string(buf);
+}
+
+// static
+std::optional<unsigned long long>
+ThermalPrinterFlutterPlugin::ParseBluetoothAddress(const std::string& mac) {
+  std::string hex;
+  hex.reserve(12);
+  for (char c : mac) {
+    if (c == ':' || c == '-' || c == ' ') continue;
+    hex.push_back(c);
+  }
+  if (hex.size() != 12) return std::nullopt;
+
+  unsigned long long addr = 0;
+  for (char c : hex) {
+    int v;
+    if (c >= '0' && c <= '9') v = c - '0';
+    else if (c >= 'a' && c <= 'f') v = c - 'a' + 10;
+    else if (c >= 'A' && c <= 'F') v = c - 'A' + 10;
+    else return std::nullopt;
+    addr = (addr << 4) | static_cast<unsigned long long>(v);
+  }
+  return addr;
+}
+
+bool ThermalPrinterFlutterPlugin::IsBluetoothRadioPresent() const {
+  BLUETOOTH_FIND_RADIO_PARAMS params{};
+  params.dwSize = sizeof(params);
+  HANDLE hRadio = nullptr;
+  HBLUETOOTH_RADIO_FIND hFind = BluetoothFindFirstRadio(&params, &hRadio);
+  if (hFind == nullptr) return false;
+  CloseHandle(hRadio);
+  BluetoothFindRadioClose(hFind);
+  return true;
+}
+
+flutter::EncodableList
+ThermalPrinterFlutterPlugin::GetPairedBluetoothDevices() {
+  flutter::EncodableList list;
+
+  BLUETOOTH_DEVICE_SEARCH_PARAMS params{};
+  params.dwSize               = sizeof(params);
+  params.fReturnAuthenticated = TRUE;   // paired devices
+  params.fReturnRemembered    = TRUE;
+  params.fReturnConnected     = TRUE;
+  params.fReturnUnknown       = FALSE;
+  params.fIssueInquiry        = FALSE;  // no active scan — only known devices
+  params.cTimeoutMultiplier   = 0;
+  params.hRadio               = nullptr;  // search all radios
+
+  BLUETOOTH_DEVICE_INFO info{};
+  info.dwSize = sizeof(info);
+
+  HBLUETOOTH_DEVICE_FIND hFind = BluetoothFindFirstDevice(&params, &info);
+  if (hFind == nullptr) return list;
+
+  do {
+    flutter::EncodableMap entry;
+    entry[flutter::EncodableValue("name")] =
+        flutter::EncodableValue(WideStringToString(info.szName));
+    entry[flutter::EncodableValue("bleAddress")] =
+        flutter::EncodableValue(FormatBluetoothAddress(info.Address.ullLong));
+    entry[flutter::EncodableValue("type")] =
+        flutter::EncodableValue(std::string("bluetooth"));
+    entry[flutter::EncodableValue("isConnected")] =
+        flutter::EncodableValue(info.fConnected == TRUE);
+    list.push_back(flutter::EncodableValue(entry));
+  } while (BluetoothFindNextDevice(hFind, &info));
+
+  BluetoothFindDeviceClose(hFind);
+  return list;
+}
+
+// Opens one RFCOMM socket and tries to connect. When [useServiceClass] is true
+// the channel is resolved via SDP from the SPP service class; otherwise it
+// connects to the explicit RFCOMM [channel]. Returns the connected socket or
+// INVALID_SOCKET (with *outErr set to WSAGetLastError()).
+static SOCKET TryRfcommConnect(unsigned long long btAddr,
+                               bool useServiceClass,
+                               int channel,
+                               int* outErr) {
+  SOCKET s = socket(AF_BTH, SOCK_STREAM, BTHPROTO_RFCOMM);
+  if (s == INVALID_SOCKET) {
+    *outErr = WSAGetLastError();
+    return INVALID_SOCKET;
+  }
+
+  SOCKADDR_BTH sa{};
+  sa.addressFamily = AF_BTH;
+  sa.btAddr        = static_cast<BTH_ADDR>(btAddr);
+  if (useServiceClass) {
+    // SPP service class UUID 00001101-0000-1000-8000-00805F9B34FB — Windows
+    // resolves the RFCOMM channel via SDP (like Android's
+    // createRfcommSocketToServiceRecord). Some printers don't publish it.
+    sa.serviceClassId = GUID{0x00001101, 0x0000, 0x1000,
+                             {0x80, 0x00, 0x00, 0x80, 0x5F, 0x9B, 0x34, 0xFB}};
+    sa.port = 0;
+  } else {
+    sa.port = static_cast<ULONG>(channel);
+  }
+
+  if (connect(s, reinterpret_cast<SOCKADDR*>(&sa),
+              static_cast<int>(sizeof(sa))) != 0) {
+    *outErr = WSAGetLastError();
+    closesocket(s);
+    return INVALID_SOCKET;
+  }
+  return s;
+}
+
+bool ThermalPrinterFlutterPlugin::BluetoothConnect(const std::string& address) {
+  last_bt_error_ = 0;
+  if (!EnsureWinsock()) {
+    last_bt_error_ = WSAGetLastError();
+    return false;
+  }
+
+  auto addrOpt = ParseBluetoothAddress(address);
+  if (!addrOpt.has_value()) {
+    last_bt_error_ = -1;  // bad address string
+    return false;
+  }
+  const unsigned long long btAddr = addrOpt.value();
+
+  BluetoothDisconnect();  // one connection at a time
+
+  int err = 0;
+  // First try SDP service-class resolution (works when the printer publishes
+  // the SPP record). If that fails (common — e.g. WSAEADDRNOTAVAIL 10049),
+  // fall back to scanning the usual RFCOMM channels; ESC/POS printers almost
+  // always listen on channel 1. A failed attempt returns quickly.
+  SOCKET s = TryRfcommConnect(btAddr, /*useServiceClass=*/true, 0, &err);
+  for (int channel = 1; s == INVALID_SOCKET && channel <= 10; ++channel) {
+    s = TryRfcommConnect(btAddr, /*useServiceClass=*/false, channel, &err);
+  }
+
+  if (s == INVALID_SOCKET) {
+    last_bt_error_ = err;
+    return false;
+  }
+
+  bt_socket_ = s;
+  return true;
+}
+
+bool ThermalPrinterFlutterPlugin::BluetoothWrite(
+    const std::vector<uint8_t>& bytes) {
+  if (bt_socket_ == INVALID_SOCKET) return false;
+  if (bytes.empty()) return true;
+
+  // Single logical write of the whole payload (send may split internally; the
+  // loop only covers partial sends). No artificial chunking — matches Android.
+  const char* src = reinterpret_cast<const char*>(bytes.data());
+  int remaining   = static_cast<int>(bytes.size());
+  while (remaining > 0) {
+    int sent = send(bt_socket_, src, remaining, 0);
+    if (sent == SOCKET_ERROR || sent == 0) {
+      BluetoothDisconnect();
+      return false;
+    }
+    src       += sent;
+    remaining -= sent;
+  }
+  return true;
+}
+
+void ThermalPrinterFlutterPlugin::BluetoothDisconnect() {
+  if (bt_socket_ != INVALID_SOCKET) {
+    shutdown(bt_socket_, SD_BOTH);
+    closesocket(bt_socket_);
+    bt_socket_ = INVALID_SOCKET;
+  }
+}
+
+bool ThermalPrinterFlutterPlugin::BluetoothIsConnected() const {
+  return bt_socket_ != INVALID_SOCKET;
+}
+
+// ─────────────────────────────────────────────
 // HandleMethodCall — dispatch Flutter MethodChannel calls
 // ─────────────────────────────────────────────
 
@@ -437,6 +660,54 @@ void ThermalPrinterFlutterPlugin::HandleMethodCall(
     return;
   }
 
+  // ── Bluetooth: capability / state ───────────────────────────────────────
+  // Windows has no per-app runtime Bluetooth permission, so permissions are
+  // always granted; "enabled" maps to "a radio exists".
+  if (method == "checkBluetoothPermissions") {
+    result->Success(flutter::EncodableValue(true));
+    return;
+  }
+  if (method == "isBluetoothEnabled" || method == "enableBluetooth") {
+    result->Success(flutter::EncodableValue(IsBluetoothRadioPresent()));
+    return;
+  }
+
+  // ── pairedbluetooths ────────────────────────────────────────────────────
+  if (method == "pairedbluetooths") {
+    result->Success(flutter::EncodableValue(GetPairedBluetoothDevices()));
+    return;
+  }
+
+  // ── connect (arg: "XX:XX:XX:XX:XX:XX" address string) ───────────────────
+  if (method == "connect") {
+    const auto* address = std::get_if<std::string>(method_call.arguments());
+    if (!address || address->empty()) {
+      result->Error("invalid_arguments", "connect requires a Bluetooth address string");
+      return;
+    }
+    if (BluetoothConnect(*address)) {
+      result->Success(flutter::EncodableValue(true));
+    } else {
+      result->Error("connect_failed",
+                    "RFCOMM connect failed (WSA error " +
+                        std::to_string(last_bt_error_) + ")");
+    }
+    return;
+  }
+
+  // ── disconnect ──────────────────────────────────────────────────────────
+  if (method == "disconnect") {
+    BluetoothDisconnect();
+    result->Success(flutter::EncodableValue(true));
+    return;
+  }
+
+  // ── isConnected ─────────────────────────────────────────────────────────
+  if (method == "isConnected") {
+    result->Success(flutter::EncodableValue(BluetoothIsConnected()));
+    return;
+  }
+
   // ── usbprinters ────────────────────────────────────────────────────────
   if (method == "usbprinters") {
     flutter::EncodableList list;
@@ -452,11 +723,31 @@ void ThermalPrinterFlutterPlugin::HandleMethodCall(
   }
 
   // ── writebytes ─────────────────────────────────────────────────────────
-  // Wire contract: argument is Map {"bytes": Uint8List, "printerName": String}
-  // bytes may arrive as vector<uint8_t> (FlutterStandardTypedData) or
-  // EncodableList<int32_t> (legacy).
+  // Two wire contracts share this method, distinguished by the argument shape:
+  //   • Bluetooth: a bare Uint8List / List<int> → stream to the active RFCOMM
+  //     socket (the BluetoothPrinterRepository sends raw bytes, no map).
+  //   • USB/spooler: Map {"bytes": Uint8List, "printerName": String}.
   if (method == "writebytes") {
-    const auto* args = std::get_if<flutter::EncodableMap>(method_call.arguments());
+    const flutter::EncodableValue* args_value = method_call.arguments();
+
+    // Bluetooth path: anything that isn't a Map is treated as a raw payload.
+    if (args_value != nullptr &&
+        !std::holds_alternative<flutter::EncodableMap>(*args_value)) {
+      auto bytesOpt = ExtractBytes(*args_value);
+      if (!bytesOpt.has_value()) {
+        result->Error("invalid_arguments", "bytes must be Uint8List or List<int>");
+        return;
+      }
+      if (BluetoothWrite(bytesOpt.value())) {
+        result->Success(flutter::EncodableValue(true));
+      } else {
+        result->Error("print_failed",
+                      "Bluetooth write failed (not connected or link dropped).");
+      }
+      return;
+    }
+
+    const auto* args = std::get_if<flutter::EncodableMap>(args_value);
     if (!args) {
       result->Error("invalid_arguments", "Expected a Map argument for writebytes");
       return;
