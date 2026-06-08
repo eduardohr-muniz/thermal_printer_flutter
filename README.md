@@ -9,7 +9,7 @@ Flutter plugin for ESC/POS thermal printing over **USB**, **Bluetooth (BLE)** an
 | Android  | ❌  | ✅        | ✅      |
 | iOS      | ❌  | ✅        | ✅      |
 | macOS    | ✅  | ✅        | ✅      |
-| Windows  | ✅  | ❌        | ✅      |
+| Windows  | ✅  | ✅        | ✅      |
 | Linux    | ❌  | ❌        | ✅      |
 | Web      | ❌  | ❌        | 🚧      |
 
