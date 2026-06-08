@@ -33,10 +33,6 @@ private const val SPP_UUID = "00001101-0000-1000-8000-00805F9B34FB"
 private const val BLUETOOTH_PERMISSION_REQUEST_CODE = 1
 private const val BLUETOOTH_ENABLE_REQUEST_CODE = 2
 
-/// Chunk size for socket writes. Modest chunks avoid huge single writes on some
-/// BluetoothSocket implementations; throughput is unaffected (no inter-chunk delay).
-private const val WRITE_CHUNK_SIZE = 4096
-
 /// Canonical string for the bluetooth printer type returned to Dart.
 private const val PRINTER_TYPE_BLUETOOTH = "bluetooth"
 
@@ -213,15 +209,10 @@ class ThermalPrinterFlutterPlugin :
         // Roda na thread de IO para não bloquear a UI durante impressões longas.
         ioExecutor.execute {
             try {
-                // Escreve em blocos (sem delays) — seguro para payloads grandes
-                // em SPP, sem perda de throughput. O write bloqueia conforme o
-                // controle de fluxo do RFCOMM/impressora, não por causa do tamanho.
-                var offset = 0
-                while (offset < bytes.size) {
-                    val end = minOf(offset + WRITE_CHUNK_SIZE, bytes.size)
-                    stream.write(bytes, offset, end - offset)
-                    offset = end
-                }
+                // Um único write + flush: enviar o buffer inteiro de uma vez faz
+                // a impressora receber um fluxo contínuo. Escrever em blocos fazia
+                // a impressão "picotar" (bandas/pausas), então evitamos chunking.
+                stream.write(bytes)
                 stream.flush()
                 mainHandler.post { result.success(true) }
             } catch (e: IOException) {
