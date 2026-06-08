@@ -9,6 +9,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -23,11 +25,17 @@ import io.flutter.plugin.common.PluginRegistry
 import java.io.IOException
 import java.io.OutputStream
 import java.util.UUID
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 private const val TAG = "THERMAL_PRINTER_FLUTTER"
 private const val SPP_UUID = "00001101-0000-1000-8000-00805F9B34FB"
 private const val BLUETOOTH_PERMISSION_REQUEST_CODE = 1
 private const val BLUETOOTH_ENABLE_REQUEST_CODE = 2
+
+/// Chunk size for socket writes. Modest chunks avoid huge single writes on some
+/// BluetoothSocket implementations; throughput is unaffected (no inter-chunk delay).
+private const val WRITE_CHUNK_SIZE = 4096
 
 /// Canonical string for the bluetooth printer type returned to Dart.
 private const val PRINTER_TYPE_BLUETOOTH = "bluetooth"
@@ -64,6 +72,11 @@ class ThermalPrinterFlutterPlugin :
     /// Pending result for async Bluetooth-enable request (answered exactly once).
     private var pendingBluetoothEnableResult: Result? = null
 
+    /// Single background thread for socket writes, so a long print never blocks
+    /// the platform/UI thread (avoids jank/ANR). Writes are naturally serialized.
+    private val ioExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     // ── FlutterPlugin ──────────────────────────────────────────────────────────
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
@@ -75,6 +88,7 @@ class ThermalPrinterFlutterPlugin :
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel.setMethodCallHandler(null)
         closeConnection()
+        ioExecutor.shutdown()
     }
 
     // ── MethodCallHandler ──────────────────────────────────────────────────────
@@ -196,14 +210,27 @@ class ThermalPrinterFlutterPlugin :
             result.error("NOT_CONNECTED", "Not connected to any device", null)
             return
         }
-        try {
-            stream.write(bytes)
-            stream.flush()
-            result.success(true)
-        } catch (e: IOException) {
-            Log.e(TAG, "Write failed: ${e.message}")
-            closeConnection()
-            result.error("WRITE_ERROR", e.message ?: "IO error during write", null)
+        // Roda na thread de IO para não bloquear a UI durante impressões longas.
+        ioExecutor.execute {
+            try {
+                // Escreve em blocos (sem delays) — seguro para payloads grandes
+                // em SPP, sem perda de throughput. O write bloqueia conforme o
+                // controle de fluxo do RFCOMM/impressora, não por causa do tamanho.
+                var offset = 0
+                while (offset < bytes.size) {
+                    val end = minOf(offset + WRITE_CHUNK_SIZE, bytes.size)
+                    stream.write(bytes, offset, end - offset)
+                    offset = end
+                }
+                stream.flush()
+                mainHandler.post { result.success(true) }
+            } catch (e: IOException) {
+                Log.e(TAG, "Write failed: ${e.message}")
+                closeConnection()
+                mainHandler.post {
+                    result.error("WRITE_ERROR", e.message ?: "IO error during write", null)
+                }
+            }
         }
     }
 
