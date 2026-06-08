@@ -158,7 +158,8 @@ class ThermalPrinterFlutterPlugin :
 
     private fun deviceToMap(device: BluetoothDevice): Map<String, Any> = mapOf(
         "name" to (device.name ?: ""),
-        "address" to device.address,
+        // Canonical key expected by the Dart layer (matches iOS/macOS).
+        "bleAddress" to device.address,
         "type" to PRINTER_TYPE_BLUETOOTH
     )
 

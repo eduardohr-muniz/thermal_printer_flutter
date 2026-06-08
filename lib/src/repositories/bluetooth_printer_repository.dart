@@ -26,7 +26,10 @@ class BluetoothPrinterRepository implements PrinterRepository {
           return Printer(
             type: PrinterType.bluetooth,
             name: device['name'] ?? '',
-            bleAddress: device['bleAddress'] ?? '',
+            // Aceita 'bleAddress' (iOS/macOS) e 'address' (Android) — sem o
+            // fallback, o endereço vinha vazio no Android e connect() falhava
+            // com "MAC address is required".
+            bleAddress: device['bleAddress'] ?? device['address'] ?? '',
             isConnected: device['isConnected'] ?? false,
           );
         } else if (device is String) {

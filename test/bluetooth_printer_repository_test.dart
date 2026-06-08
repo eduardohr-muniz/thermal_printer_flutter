@@ -47,6 +47,16 @@ void main() {
       expect(printers.first.isConnected, true);
     });
 
+    test('accepts the legacy Android "address" key as bleAddress', () async {
+      mockHandler((_) async => [
+            {'name': 'Android BLE', 'address': 'CC:DD:EE'},
+          ]);
+
+      final printers = await repository.getPrinters();
+
+      expect(printers.single.bleAddress, 'CC:DD:EE');
+    });
+
     test('parses "name#address" string devices', () async {
       mockHandler((_) async => ['My Printer#11:22:33']);
 
