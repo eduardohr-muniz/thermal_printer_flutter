@@ -12,6 +12,7 @@
 - Fixed `flipHorizontal` on `screenShotWidget`: it was accepted but never applied; the captured image is now actually mirrored.
 - Improved image print quality: `screenShotWidget` now downsamples with area-average interpolation and applies Floyd–Steinberg dithering by default (`dither: true`), greatly improving logos/photos/grayscale on 1-bit thermal printers. Pass `dither: false` for the previous threshold-only path (sharper for pure text).
 - Changed the default `screenShotWidget` `width` from `550` to `576` (80 mm @ 203 dpi, a multiple of 8) so the bitmap matches the printer head without rescaling. Use `384` for 58 mm.
+- Android Bluetooth writes now run on a background thread (single write + flush) instead of blocking the platform/UI thread. This removes the freeze/jank (and ANR risk) during long prints. The whole payload is sent in one write — chunked writes were found to make printing stutter/band — so output stays smooth; raw SPP throughput is gated by the printer, not the plugin.
 - Fixed Bluetooth connect failing on Android with "MAC address is required": the Android plugin sent the device address under the `address` key while Dart expected `bleAddress`, so the address arrived empty. Android now sends `bleAddress` (matching iOS/macOS) and the Dart parser accepts both keys.
 - Hardened Bluetooth printer parsing: a malformed paired-device string no longer drops the whole list (`RangeError`).
 - `BluetoothPrinterRepository` reconnect delay is now configurable (was a hardcoded 500 ms).
