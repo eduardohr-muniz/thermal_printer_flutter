@@ -81,6 +81,22 @@ class MethodChannelThermalPrinterFlutter
   }
 
   @override
+  Future<Printer?> requestPrinter({required PrinterType printerType}) async {
+    // O seletor interativo de dispositivos só existe na Web (WebUSB). Nas
+    // plataformas nativas use getPrinters().
+    return null;
+  }
+
+  @override
+  Future<bool> isWebUsbSupported() async => false;
+
+  @override
+  Future<bool> isWebBluetoothSupported() async => false;
+
+  @override
+  Stream<void> get onWebUsbConnectionChange => const Stream<void>.empty();
+
+  @override
   Future<void> printBytes(
       {required List<int> bytes, required Printer printer}) async {
     switch (printer.type) {

@@ -50,6 +50,31 @@ class _MockPlatform
   }
 
   @override
+  Future<Printer?> requestPrinter({required PrinterType printerType}) async {
+    calls.add('requestPrinter');
+    lastPrinterType = printerType;
+    return Printer(type: printerType, name: 'requested');
+  }
+
+  @override
+  Future<bool> isWebUsbSupported() async {
+    calls.add('isWebUsbSupported');
+    return false;
+  }
+
+  @override
+  Future<bool> isWebBluetoothSupported() async {
+    calls.add('isWebBluetoothSupported');
+    return false;
+  }
+
+  @override
+  Stream<void> get onWebUsbConnectionChange {
+    calls.add('onWebUsbConnectionChange');
+    return const Stream<void>.empty();
+  }
+
+  @override
   Future<void> printBytes(
       {required List<int> bytes, required Printer printer}) async {
     calls.add('printBytes');
@@ -131,6 +156,22 @@ void main() {
     test('base dispose is a no-op (does not throw)', () async {
       await _BarePlatform().dispose();
     });
+
+    test('base web-capability defaults do not throw and report unsupported',
+        () async {
+      final base = _BarePlatform();
+
+      // Diferente dos demais métodos, estes têm corpo default (não lançam):
+      // o seletor interativo e o suporte a WebUSB/Web Bluetooth só existem na
+      // Web, então fora dela o default é null/false.
+      expect(await base.requestPrinter(printerType: PrinterType.usb), isNull);
+      expect(
+          await base.requestPrinter(printerType: PrinterType.bluetooth), isNull);
+      expect(await base.isWebUsbSupported(), isFalse);
+      expect(await base.isWebBluetoothSupported(), isFalse);
+      // Stream vazio (fecha sem emitir) fora da Web.
+      expect(await base.onWebUsbConnectionChange.isEmpty, isTrue);
+    });
   });
 
   group('ThermalPrinterFlutter delegates to the platform', () {
@@ -169,6 +210,30 @@ void main() {
 
       expect(printers.single.type, PrinterType.bluetooth);
       expect(mock.lastPrinterType, PrinterType.bluetooth);
+    });
+
+    test('requestPrinter passes through the printer type', () async {
+      final printer =
+          await plugin.requestPrinter(printerType: PrinterType.usb);
+
+      expect(printer?.type, PrinterType.usb);
+      expect(mock.lastPrinterType, PrinterType.usb);
+      expect(mock.calls, contains('requestPrinter'));
+    });
+
+    test('isWebUsbSupported delegates to the platform', () async {
+      expect(await plugin.isWebUsbSupported(), isFalse);
+      expect(mock.calls, contains('isWebUsbSupported'));
+    });
+
+    test('isWebBluetoothSupported delegates to the platform', () async {
+      expect(await plugin.isWebBluetoothSupported(), isFalse);
+      expect(mock.calls, contains('isWebBluetoothSupported'));
+    });
+
+    test('onWebUsbConnectionChange delegates to the platform', () async {
+      expect(plugin.onWebUsbConnectionChange, isA<Stream<void>>());
+      expect(mock.calls, contains('onWebUsbConnectionChange'));
     });
 
     test('printBytes forwards bytes and printer', () async {

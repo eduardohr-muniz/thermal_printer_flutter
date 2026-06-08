@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_print
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/services.dart';
@@ -41,6 +42,7 @@ class MyApp extends StatefulWidget {
 class _MyAppState extends State<MyApp> {
   String _platformVersion = 'Unknown';
   final _thermalPrinterFlutterPlugin = ThermalPrinterFlutter();
+  StreamSubscription<void>? _usbConnSub;
   List<Printer> _printers = [];
   Printer? _selectedPrinter;
   bool _isLoading = false;
@@ -72,6 +74,7 @@ class _MyAppState extends State<MyApp> {
 
   @override
   void dispose() {
+    _usbConnSub?.cancel();
     // Fecha conexões de rede em pool ao descartar o plugin.
     _thermalPrinterFlutterPlugin.dispose();
     _ipController.dispose();
@@ -101,9 +104,118 @@ class _MyAppState extends State<MyApp> {
     setState(() {
       _platformVersion = platformVersion;
     });
+
+    // Na web, reconecta automaticamente dispositivos já autorizados na carga
+    // (WebUSB getDevices) — padrão recomendado: o usuário só precisa do chooser
+    // na primeira autorização; nas próximas a impressora aparece sozinha.
+    if (kIsWeb) {
+      await _loadPrinters();
+      // Auto-reconexão inteligente: ao plugar/desplugar uma impressora USB, o
+      // navegador dispara o evento e nós reconsultamos os já autorizados. No
+      // macOS, o replug é justamente quando o device fica livre, então plugar
+      // a impressora a reconecta sozinha — sem chooser.
+      _usbConnSub =
+          _thermalPrinterFlutterPlugin.onWebUsbConnectionChange.listen((_) {
+        _loadPrinters();
+      });
+    }
+  }
+
+  /// Web/USB: abre o chooser nativo do navegador (WebUSB) para o usuário
+  /// autorizar uma impressora e a adiciona à lista. Deve partir de um gesto
+  /// do usuário (clique de botão).
+  Future<void> _authorizeWebUsbPrinter() async {
+    setState(() => _connectionError = null);
+    try {
+      // 1) Navegador suporta WebUSB? (Safari/Firefox e fora da web → não.)
+      final supported = await _thermalPrinterFlutterPlugin.isWebUsbSupported();
+      if (!supported) {
+        setState(() => _connectionError =
+            'WebUSB indisponível neste navegador. Use Chrome/Edge/Opera em '
+            'HTTPS ou localhost.');
+        return;
+      }
+
+      // 2) Abre o chooser. null = usuário cancelou OU nenhum dispositivo
+      //    compatível apareceu (no macOS/Windows o driver de classe do SO
+      //    costuma "segurar" impressoras classe 0x07, escondendo-as do WebUSB).
+      final printer = await _thermalPrinterFlutterPlugin.requestPrinter(
+        printerType: PrinterType.usb,
+      );
+      if (printer == null) {
+        setState(() => _connectionError =
+            'Nenhuma impressora no chooser. No macOS, o driver de impressora do '
+            'sistema "segura" o dispositivo (classe 0x07) e o esconde do WebUSB. '
+            'Solução: DESCONECTE e RECONECTE o cabo USB e clique aqui logo em '
+            'seguida (janela em que o device fica livre). No macOS, considere '
+            'usar Bluetooth (BLE), que não sofre essa disputa.');
+        return;
+      }
+      setState(() {
+        // Evita duplicatas pela chave usbAddress.
+        _printers
+          ..removeWhere((p) => p.usbAddress == printer.usbAddress)
+          ..add(printer);
+        _selectedPrinter = printer;
+      });
+      _showBanner('Impressora autorizada: ${printer.name}');
+    } catch (e) {
+      // Erros reais de open/claim/transfer chegam aqui com a mensagem do
+      // DOMException (ex.: "Unable to claim interface", "Access denied").
+      setState(() => _connectionError = 'Erro ao autorizar impressora USB: $e');
+    }
+  }
+
+  /// Web/BLE: abre o chooser nativo do navegador (Web Bluetooth) para o usuário
+  /// autorizar uma impressora BLE e a adiciona à lista. Deve partir de um gesto
+  /// do usuário (clique de botão).
+  Future<void> _authorizeWebBluetoothPrinter() async {
+    setState(() => _connectionError = null);
+    try {
+      final supported =
+          await _thermalPrinterFlutterPlugin.isWebBluetoothSupported();
+      if (!supported) {
+        setState(() => _connectionError =
+            'Web Bluetooth indisponível neste navegador. Use Chrome/Edge/Opera '
+            'em HTTPS ou localhost. (Apenas BLE; Bluetooth clássico não funciona '
+            'na web.)');
+        return;
+      }
+
+      final printer = await _thermalPrinterFlutterPlugin.requestPrinter(
+        printerType: PrinterType.bluetooth,
+      );
+      if (printer == null) {
+        setState(() => _connectionError =
+            'Nenhuma impressora BLE autorizada (cancelado). Verifique se a '
+            'impressora está ligada e em modo BLE.');
+        return;
+      }
+      // Conecta o GATT já na autorização para habilitar a impressão e
+      // surfar erros de conexão cedo.
+      final connected =
+          await _thermalPrinterFlutterPlugin.connect(printer: printer);
+      final stored = printer.copyWith(isConnected: connected);
+      setState(() {
+        _printers
+          ..removeWhere((p) => p.bleAddress == stored.bleAddress)
+          ..add(stored);
+        _selectedPrinter = stored;
+      });
+      _showBanner(connected
+          ? 'Impressora BLE conectada: ${stored.name}'
+          : 'Impressora BLE autorizada (não conectada): ${stored.name}');
+    } catch (e) {
+      // Erros reais de GATT/escrita chegam aqui com a mensagem do DOMException.
+      setState(() => _connectionError = 'Erro ao autorizar impressora BLE: $e');
+    }
   }
 
   Future<void> _loadPrinters() async {
+    // Evita execuções concorrentes (ex.: vários eventos USB connect/disconnect
+    // em sequência ao replugar disparariam _loadPrinters sobrepostos).
+    if (_isLoading) return;
+    if (!mounted) return;
     setState(() {
       _isLoading = true;
       _connectionError = null;
@@ -111,7 +223,9 @@ class _MyAppState extends State<MyApp> {
 
     try {
       List<Printer> bluetoothPrinters = [];
-      if (!Platform.isWindows) {
+      // `kIsWeb` curto-circuita antes de tocar em `Platform` (dart:io), que
+      // lança na web. Bluetooth também não é suportado no browser.
+      if (!kIsWeb && !Platform.isWindows) {
         // Check if Bluetooth is enabled
         final isEnabled = await _thermalPrinterFlutterPlugin.isBluetoothEnabled();
         if (!isEnabled) {
@@ -157,14 +271,19 @@ class _MyAppState extends State<MyApp> {
         print('Error loading USB printers: $e');
       }
 
+      if (!mounted) return;
       setState(() {
         _printers = [...bluetoothPrinters, ...usbPrinters];
-        if (_printers.isNotEmpty) {
-          _selectedPrinter = _printers[0];
+        // Preserva a seleção atual se ainda existir (evita "pular" a impressora
+        // escolhida quando o auto-reconnect recarrega a lista).
+        if (_selectedPrinter == null ||
+            !_printers.contains(_selectedPrinter)) {
+          _selectedPrinter = _printers.isNotEmpty ? _printers[0] : null;
         }
         _isLoading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _connectionError = 'Error loading printers: $e';
         _isLoading = false;
@@ -643,7 +762,7 @@ class _MyAppState extends State<MyApp> {
                       ),
                     ),
                   const SizedBox(height: 20),
-                  if (!Platform.isWindows) ...[
+                  if (!kIsWeb && !Platform.isWindows) ...[
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       children: [
@@ -688,6 +807,22 @@ class _MyAppState extends State<MyApp> {
                           )
                         : const Text('Load Printers'),
                   ),
+                  if (kIsWeb) ...[
+                    const SizedBox(height: 10),
+                    ElevatedButton.icon(
+                      onPressed: _isLoading ? null : _authorizeWebUsbPrinter,
+                      icon: const Icon(Icons.usb),
+                      label: const Text('Authorize USB printer (WebUSB)'),
+                    ),
+                    const SizedBox(height: 10),
+                    ElevatedButton.icon(
+                      onPressed:
+                          _isLoading ? null : _authorizeWebBluetoothPrinter,
+                      icon: const Icon(Icons.bluetooth),
+                      label:
+                          const Text('Authorize BLE printer (Web Bluetooth)'),
+                    ),
+                  ],
                   const SizedBox(height: 20),
                   if (_printers.isNotEmpty) ...[
                     const Text('Select a printer:'),

@@ -86,6 +86,54 @@ class ThermalPrinterFlutter implements ThermalPrinterFlutterPlatform {
         .getPrinters(printerType: printerType);
   }
 
+  /// Abre o seletor de dispositivos para o usuário autorizar uma impressora.
+  ///
+  /// Voltado para a **Web/USB** (WebUSB): abre o chooser nativo do navegador e
+  /// retorna a impressora autorizada. Em plataformas nativas retorna `null`
+  /// (use [getPrinters]). Também retorna `null` se o navegador não suportar
+  /// WebUSB, ou se o usuário cancelar/não selecionar nada.
+  ///
+  /// Na web, [getPrinters] lista apenas dispositivos já autorizados; chame
+  /// este método (a partir de um gesto do usuário, ex.: clique de botão) para
+  /// autorizar um novo.
+  @override
+  Future<Printer?> requestPrinter({required PrinterType printerType}) async {
+    return await ThermalPrinterFlutterPlatform.instance
+        .requestPrinter(printerType: printerType);
+  }
+
+  /// Indica se o navegador suporta impressão USB via WebUSB.
+  ///
+  /// Retorna `true` apenas na Web em navegadores Chromium com `navigator.usb`.
+  /// Use para decidir se vale abrir o chooser com [requestPrinter] ou orientar
+  /// o usuário a trocar de navegador.
+  @override
+  Future<bool> isWebUsbSupported() async {
+    return await ThermalPrinterFlutterPlatform.instance.isWebUsbSupported();
+  }
+
+  /// Indica se o navegador suporta impressão Bluetooth BLE via Web Bluetooth.
+  ///
+  /// Retorna `true` apenas na Web em navegadores Chromium com
+  /// `navigator.bluetooth`. Use para decidir se vale abrir o chooser com
+  /// [requestPrinter] (Bluetooth) ou orientar o usuário.
+  @override
+  Future<bool> isWebBluetoothSupported() async {
+    return await ThermalPrinterFlutterPlatform.instance
+        .isWebBluetoothSupported();
+  }
+
+  /// Emite quando um dispositivo USB conecta/desconecta (apenas Web).
+  ///
+  /// Assine para **auto-reconectar** impressoras já autorizadas ao plugar o
+  /// cabo: no evento, chame [getPrinters]/[requestPrinter] novamente (que
+  /// reaproveitam a permissão existente sem abrir o chooser). Útil no macOS,
+  /// onde o replug é o momento em que o dispositivo fica livre. Fora da Web é um
+  /// stream vazio.
+  @override
+  Stream<void> get onWebUsbConnectionChange =>
+      ThermalPrinterFlutterPlatform.instance.onWebUsbConnectionChange;
+
   /// Descobre automaticamente impressoras de rede na rede local
   ///
   /// Escaneia a rede local procurando por impressoras nas portas comuns:
