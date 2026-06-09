@@ -20,8 +20,7 @@ class ThermalPrinterFlutter implements ThermalPrinterFlutterPlatform {
   ///
   /// [networkRepository] é um seam de testabilidade (opcional); em produção
   /// usa a implementação real de descoberta/impressão de rede.
-  ThermalPrinterFlutter({NetworkPrinterRepository? networkRepository})
-      : _networkRepository = networkRepository ?? NetworkPrinterRepository();
+  ThermalPrinterFlutter({NetworkPrinterRepository? networkRepository}) : _networkRepository = networkRepository ?? NetworkPrinterRepository();
 
   final NetworkPrinterRepository _networkRepository;
 
@@ -32,6 +31,22 @@ class ThermalPrinterFlutter implements ThermalPrinterFlutterPlatform {
   /// RAW concorrentes no spooler (causa de impressão "maluca"/duplicada
   /// quando o chamador dispara [printBytes] em loop).
   Future<void> _printQueue = Future<void>.value();
+
+  /// Drenagem entre jobs Bluetooth (BLE).
+  ///
+  /// A impressora confirma o RECEBIMENTO dos bytes (no buffer dela) muito antes
+  /// de terminar de IMPRIMIR. O buffer aguenta UM job grande (texto OU imagem),
+  /// mas se o próximo job entra logo em seguida (ex.: imagem após um texto
+  /// longo) os dois coexistem no buffer e ele estoura → a impressão trunca ou a
+  /// impressora congela. Por isso seguramos o fim de cada job BLE por um tempo
+  /// proporcional ao volume enviado, dando à impressora tempo de drenar antes do
+  /// próximo. Só afeta Bluetooth (USB/rede vão por spooler/socket).
+  ///
+  /// Calibragem por hardware: se ainda bugar na transição, DIMINUA
+  /// [_bleDrainBytesPerMs] (mais pausa); se a pausa entre jobs incomodar e não
+  /// bugar, AUMENTE. `0` desliga a drenagem.
+  static const double _bleDrainBytesPerMs = 4.0;
+  static const int _bleDrainMaxMs = 5000;
 
   /// Executa [action] de forma serializada em relação a outras impressões.
   ///
@@ -63,8 +78,7 @@ class ThermalPrinterFlutter implements ThermalPrinterFlutterPlatform {
   /// Verifica se as permissões de Bluetooth foram concedidas.
   @override
   Future<bool> checkBluetoothPermissions() async {
-    return await ThermalPrinterFlutterPlatform.instance
-        .checkBluetoothPermissions();
+    return await ThermalPrinterFlutterPlatform.instance.checkBluetoothPermissions();
   }
 
   /// Indica se o Bluetooth está habilitado no dispositivo.
@@ -82,8 +96,7 @@ class ThermalPrinterFlutter implements ThermalPrinterFlutterPlatform {
   /// Lista as impressoras disponíveis para o [printerType] informado.
   @override
   Future<List<Printer>> getPrinters({required PrinterType printerType}) async {
-    return await ThermalPrinterFlutterPlatform.instance
-        .getPrinters(printerType: printerType);
+    return await ThermalPrinterFlutterPlatform.instance.getPrinters(printerType: printerType);
   }
 
   /// Abre o seletor de dispositivos para o usuário autorizar uma impressora.
@@ -98,8 +111,7 @@ class ThermalPrinterFlutter implements ThermalPrinterFlutterPlatform {
   /// autorizar um novo.
   @override
   Future<Printer?> requestPrinter({required PrinterType printerType}) async {
-    return await ThermalPrinterFlutterPlatform.instance
-        .requestPrinter(printerType: printerType);
+    return await ThermalPrinterFlutterPlatform.instance.requestPrinter(printerType: printerType);
   }
 
   /// Indica se o navegador suporta impressão USB via WebUSB.
@@ -119,8 +131,7 @@ class ThermalPrinterFlutter implements ThermalPrinterFlutterPlatform {
   /// [requestPrinter] (Bluetooth) ou orientar o usuário.
   @override
   Future<bool> isWebBluetoothSupported() async {
-    return await ThermalPrinterFlutterPlatform.instance
-        .isWebBluetoothSupported();
+    return await ThermalPrinterFlutterPlatform.instance.isWebBluetoothSupported();
   }
 
   /// Emite quando um dispositivo USB conecta/desconecta (apenas Web).
@@ -131,8 +142,7 @@ class ThermalPrinterFlutter implements ThermalPrinterFlutterPlatform {
   /// onde o replug é o momento em que o dispositivo fica livre. Fora da Web é um
   /// stream vazio.
   @override
-  Stream<void> get onWebUsbConnectionChange =>
-      ThermalPrinterFlutterPlatform.instance.onWebUsbConnectionChange;
+  Stream<void> get onWebUsbConnectionChange => ThermalPrinterFlutterPlatform.instance.onWebUsbConnectionChange;
 
   /// Descobre automaticamente impressoras de rede na rede local
   ///
@@ -152,8 +162,7 @@ class ThermalPrinterFlutter implements ThermalPrinterFlutterPlatform {
     Function(String)? onProgress,
     bool requireConfirmation = false,
   }) async {
-    return await _networkRepository.discoverNetworkPrinters(
-        onProgress: onProgress, requireConfirmation: requireConfirmation);
+    return await _networkRepository.discoverNetworkPrinters(onProgress: onProgress, requireConfirmation: requireConfirmation);
   }
 
   /// Envia [bytes] (ESC/POS) para a [printer].
@@ -180,19 +189,26 @@ class ThermalPrinterFlutter implements ThermalPrinterFlutterPlatform {
     assert(copies >= 1, 'copies deve ser >= 1');
     if (copies < 1) copies = 1;
 
-    final List<int> payload = copies == 1
-        ? bytes
-        : <int>[for (int i = 0; i < copies; i++) ...bytes];
+    final List<int> payload = copies == 1 ? bytes : <int>[for (int i = 0; i < copies; i++) ...bytes];
 
-    return _enqueuePrint(() => ThermalPrinterFlutterPlatform.instance
-        .printBytes(bytes: payload, printer: printer));
+    return _enqueuePrint(() async {
+      await ThermalPrinterFlutterPlatform.instance.printBytes(bytes: payload, printer: printer);
+
+      // Drenagem entre jobs BLE: segura a fila serial até a impressora ter tempo
+      // de imprimir este job, pra o próximo não empilhar dados num buffer cheio.
+      if (printer.type == PrinterType.bluetooth && _bleDrainBytesPerMs > 0) {
+        final drainMs = (payload.length / _bleDrainBytesPerMs).round().clamp(0, _bleDrainMaxMs);
+        if (drainMs > 0) {
+          await Future<void>.delayed(Duration(milliseconds: drainMs));
+        }
+      }
+    });
   }
 
   /// Conecta-se à [printer].
   @override
   Future<bool> connect({required Printer printer}) async {
-    return await ThermalPrinterFlutterPlatform.instance
-        .connect(printer: printer);
+    return await ThermalPrinterFlutterPlatform.instance.connect(printer: printer);
   }
 
   /// Desconecta-se da [printer].
@@ -204,14 +220,12 @@ class ThermalPrinterFlutter implements ThermalPrinterFlutterPlatform {
   /// Indica se a [printer] está conectada.
   @override
   Future<bool> isConnected({required Printer printer}) async {
-    return await ThermalPrinterFlutterPlatform.instance
-        .isConnected(printer: printer);
+    return await ThermalPrinterFlutterPlatform.instance.isConnected(printer: printer);
   }
 
   @override
   Future<PrinterStatus> getPrinterStatus({required Printer printer}) async {
-    return await ThermalPrinterFlutterPlatform.instance
-        .getPrinterStatus(printer: printer);
+    return await ThermalPrinterFlutterPlatform.instance.getPrinterStatus(printer: printer);
   }
 
   /// Libera recursos retidos pelo plugin (conexões de rede em pool).

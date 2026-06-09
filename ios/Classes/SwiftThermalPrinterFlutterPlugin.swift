@@ -28,10 +28,48 @@ public class SwiftThermalPrinterFlutterPlugin: NSObject, CBCentralManagerDelegat
     /// `true` when the in-flight write uses `.withResponse` (ack-paced),
     /// `false` for `.withoutResponse` (flow-controlled via `canSendWriteWithoutResponse`).
     private var pendingUseResponse: Bool = false
-    /// Breathing room between acked `.withResponse` chunks — some thermal
-    /// printers ack into their RX buffer faster than the head can drain it,
-    /// so a small pause avoids overrunning slow hardware mid-print.
+    /// Breathing room between acked `.withResponse` chunks (caminho fallback).
     private let interChunkDelay: TimeInterval = 0.01
+    /// Bytes `.withoutResponse` já enviados desde a última pausa de buffer.
+    private var bytesSinceBufferPause: Int = 0
+    /// `true` enquanto esperamos o ACK do "flush barrier" (último chunk de um job
+    /// `.withoutResponse` enviado como `.withResponse`). Ver MARK abaixo.
+    private var pendingFlushAck: Bool = false
+
+    // MARK: - Pacing de imagem BLE
+    //
+    // TRÊS modos de falha ao imprimir via BLE (vazão x velocidade do printer):
+    //   • TYPEWRITER (lento, imprime-para-imprime) = cabeça "passa fome": dados
+    //     chegam mais devagar do que ela imprime. Causa: `.withResponse` espera
+    //     ACK round-trip por chunk (~30ms = 1 connection interval BLE).
+    //   • TRUNCA (imagem longa sai pela metade) = dados rápidos demais estouram o
+    //     buffer RX de printers baratos.
+    //   • TRAVA (texto longo/imagem não sai, texto curto sai) = mandar UM chunk e
+    //     esperar `peripheralIsReady` — esse callback só dispara quando `canSend`
+    //     vai de false→true; se a fila não encheu, ele nunca vem e o stream para
+    //     no 1º chunk.
+    //
+    // Solução robusta (padrão documentado pela Apple), sem travar:
+    //   1. Preferir `.withoutResponse` (mata o typewriter).
+    //   2. Loop `while canSendWriteWithoutResponse`: manda chunks (tamanho do MTU)
+    //      enquanto a fila aceita; PARA só quando `canSend` vira false, condição
+    //      que GARANTE que `peripheralIsReady` vai disparar pra retomar → nunca trava.
+    //   3. Pausa só na FRONTEIRA do buffer (a cada `bufferFlushBytes`, espera
+    //      `bufferFlushDelay`) p/ o buffer RX drenar → anti-trunca. É grossa (não
+    //      por chunk), então não causa picote.
+    //   4. FLUSH BARRIER no fim do job: o último chunk vai como `.withResponse`.
+    //      `.withoutResponse` só ENFILEIRA — `writebytes` retornaria antes de a
+    //      impressora receber os dados, e o PRÓXIMO print (ex.: imagem logo após
+    //      um texto longo) empilharia bytes num stream ainda não entregue →
+    //      estoura o buffer no boundary e a impressora BUGA. Pela ordem do ATT, o
+    //      ACK do último chunk `.withResponse` só chega após TODOS os
+    //      `.withoutResponse` anteriores; só então o job completa. Custa 1 RTT por
+    //      job (não por chunk), então não traz o typewriter de volta. Se a
+    //      característica não tiver `.write`, caímos num drain por tempo.
+    // Ajuste por hardware: PICOTANDO → +`bufferFlushBytes` / -`bufferFlushDelay`;
+    // TRUNCANDO → -`bufferFlushBytes` / +`bufferFlushDelay`.
+    private let bufferFlushBytes: Int = 4096
+    private let bufferFlushDelay: TimeInterval = 0.020
 
     // UUIDs for thermal printers
     private let printerServiceUUID = CBUUID(string: "49535343-FE7D-4AE5-8FA9-9FAFD205E455")
@@ -168,13 +206,14 @@ public class SwiftThermalPrinterFlutterPlugin: NSObject, CBCentralManagerDelegat
             return
         }
 
-        // Prefer `.withResponse` when the characteristic supports it: the
-        // printer acks each chunk so we never outrun its buffer. Fall back to
-        // `.withoutResponse` (flow-controlled) otherwise.
+        // Preferir `.withoutResponse` (mata o typewriter); `.withResponse` é só
+        // fallback para o printer raro que não anuncia `.writeWithoutResponse`.
         writebytesResult = result
         pendingWriteData = data
         pendingWriteOffset = 0
-        pendingUseResponse = characteristic.properties.contains(.write)
+        bytesSinceBufferPause = 0
+        pendingFlushAck = false
+        pendingUseResponse = !characteristic.properties.contains(.writeWithoutResponse)
         pumpPendingWrite()
     }
 
@@ -216,6 +255,9 @@ public class SwiftThermalPrinterFlutterPlugin: NSObject, CBCentralManagerDelegat
             pendingWriteOffset = end
             peripheral.writeValue(chunk, for: characteristic, type: .withResponse)
         } else {
+            // `.withoutResponse`: pump enquanto a fila de TX aceitar; PARA só
+            // quando `canSend` vira false (garante o peripheralIsReady → não trava).
+            let canFlushWithResponse = characteristic.properties.contains(.write)
             while pendingWriteOffset < data.count {
                 guard peripheral.canSendWriteWithoutResponse else {
                     // Wait for peripheralIsReady(toSendWriteWithoutResponse:).
@@ -223,12 +265,46 @@ public class SwiftThermalPrinterFlutterPlugin: NSObject, CBCentralManagerDelegat
                 }
                 let end = min(pendingWriteOffset + maxLen, data.count)
                 // subdata(in:) copies into a zero-based Data; a bare `data[range]`
-            // slice keeps the parent's indices and is mis-sent by CoreBluetooth
-            // (corrupting chunks after the first). Matches the PR's `Array(...)`.
-            let chunk = data.subdata(in: pendingWriteOffset..<end)
+                // slice keeps the parent's indices and is mis-sent by CoreBluetooth
+                // (corrupting chunks after the first). Matches the PR's `Array(...)`.
+                let chunk = data.subdata(in: pendingWriteOffset..<end)
                 pendingWriteOffset = end
+                bytesSinceBufferPause += chunk.count
+                let isLast = pendingWriteOffset >= data.count
+
+                // Flush barrier: último chunk vai como `.withResponse` para o job
+                // só completar quando a impressora confirmar o recebimento de tudo
+                // (em didWriteValueFor) — assim o próximo print não empilha bytes
+                // num stream ainda não entregue (boundary texto→imagem que bugava).
+                if isLast && canFlushWithResponse {
+                    pendingFlushAck = true
+                    peripheral.writeValue(chunk, for: characteristic, type: .withResponse)
+                    return
+                }
+
                 peripheral.writeValue(chunk, for: characteristic, type: .withoutResponse)
+
+                // Último chunk mas sem `.write` p/ ACK: não dá pra confirmar
+                // recebimento; espera um drain antes de completar o job.
+                if isLast {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + bufferFlushDelay) { [weak self] in
+                        self?.finishPendingWrite(success: true)
+                    }
+                    return
+                }
+
+                // Fronteira do buffer: pausa p/ o buffer RX do printer drenar
+                // (anti-trunca) antes de continuar. Grossa → não picota.
+                if bytesSinceBufferPause >= bufferFlushBytes {
+                    bytesSinceBufferPause = 0
+                    DispatchQueue.main.asyncAfter(deadline: .now() + bufferFlushDelay) { [weak self] in
+                        self?.pumpPendingWrite()
+                    }
+                    return
+                }
             }
+            // Inalcançável com data não-vazio (o ramo isLast sempre retorna), mas
+            // mantém o método total para data vazio.
             finishPendingWrite(success: true)
         }
     }
@@ -239,6 +315,7 @@ public class SwiftThermalPrinterFlutterPlugin: NSObject, CBCentralManagerDelegat
         writebytesResult = nil
         pendingWriteData = nil
         pendingWriteOffset = 0
+        pendingFlushAck = false
         pending?(success)
     }
 
@@ -333,12 +410,12 @@ public class SwiftThermalPrinterFlutterPlugin: NSObject, CBCentralManagerDelegat
         }
     }
 
-    /// Called only for `.withResponse` writes. Sends the next chunk once the
-    /// printer acknowledges the previous one, or fails the write on first error.
+    /// Chamado para writes `.withResponse`: tanto o caminho fallback (ack por
+    /// chunk) quanto o ACK do flush barrier (último chunk de um job `.withoutResponse`).
     public func peripheral(_ peripheral: CBPeripheral,
                             didWriteValueFor characteristic: CBCharacteristic,
                             error: Error?) {
-        guard pendingUseResponse, writebytesResult != nil else { return }
+        guard writebytesResult != nil else { return }
 
         if let error = error {
             NSLog("[ThermalPrinter] BLE write error: %@", error.localizedDescription)
@@ -346,6 +423,15 @@ public class SwiftThermalPrinterFlutterPlugin: NSObject, CBCentralManagerDelegat
             return
         }
 
+        // Flush barrier: a impressora confirmou o recebimento de todo o job.
+        // Só agora completamos, para o próximo print não empilhar dados.
+        if pendingFlushAck {
+            finishPendingWrite(success: true)
+            return
+        }
+
+        // Caminho fallback `.withResponse`: ack-paced, manda o próximo chunk.
+        guard pendingUseResponse else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + interChunkDelay) { [weak self] in
             self?.pumpPendingWrite()
         }

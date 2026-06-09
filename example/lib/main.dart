@@ -114,8 +114,7 @@ class _MyAppState extends State<MyApp> {
       // navegador dispara o evento e nós reconsultamos os já autorizados. No
       // macOS, o replug é justamente quando o device fica livre, então plugar
       // a impressora a reconecta sozinha — sem chooser.
-      _usbConnSub =
-          _thermalPrinterFlutterPlugin.onWebUsbConnectionChange.listen((_) {
+      _usbConnSub = _thermalPrinterFlutterPlugin.onWebUsbConnectionChange.listen((_) {
         _loadPrinters();
       });
     }
@@ -130,8 +129,7 @@ class _MyAppState extends State<MyApp> {
       // 1) Navegador suporta WebUSB? (Safari/Firefox e fora da web → não.)
       final supported = await _thermalPrinterFlutterPlugin.isWebUsbSupported();
       if (!supported) {
-        setState(() => _connectionError =
-            'WebUSB indisponível neste navegador. Use Chrome/Edge/Opera em '
+        setState(() => _connectionError = 'WebUSB indisponível neste navegador. Use Chrome/Edge/Opera em '
             'HTTPS ou localhost.');
         return;
       }
@@ -143,8 +141,7 @@ class _MyAppState extends State<MyApp> {
         printerType: PrinterType.usb,
       );
       if (printer == null) {
-        setState(() => _connectionError =
-            'Nenhuma impressora no chooser. No macOS, o driver de impressora do '
+        setState(() => _connectionError = 'Nenhuma impressora no chooser. No macOS, o driver de impressora do '
             'sistema "segura" o dispositivo (classe 0x07) e o esconde do WebUSB. '
             'Solução: DESCONECTE e RECONECTE o cabo USB e clique aqui logo em '
             'seguida (janela em que o device fica livre). No macOS, considere '
@@ -172,11 +169,9 @@ class _MyAppState extends State<MyApp> {
   Future<void> _authorizeWebBluetoothPrinter() async {
     setState(() => _connectionError = null);
     try {
-      final supported =
-          await _thermalPrinterFlutterPlugin.isWebBluetoothSupported();
+      final supported = await _thermalPrinterFlutterPlugin.isWebBluetoothSupported();
       if (!supported) {
-        setState(() => _connectionError =
-            'Web Bluetooth indisponível neste navegador. Use Chrome/Edge/Opera '
+        setState(() => _connectionError = 'Web Bluetooth indisponível neste navegador. Use Chrome/Edge/Opera '
             'em HTTPS ou localhost. (Apenas BLE; Bluetooth clássico não funciona '
             'na web.)');
         return;
@@ -186,15 +181,13 @@ class _MyAppState extends State<MyApp> {
         printerType: PrinterType.bluetooth,
       );
       if (printer == null) {
-        setState(() => _connectionError =
-            'Nenhuma impressora BLE autorizada (cancelado). Verifique se a '
+        setState(() => _connectionError = 'Nenhuma impressora BLE autorizada (cancelado). Verifique se a '
             'impressora está ligada e em modo BLE.');
         return;
       }
       // Conecta o GATT já na autorização para habilitar a impressão e
       // surfar erros de conexão cedo.
-      final connected =
-          await _thermalPrinterFlutterPlugin.connect(printer: printer);
+      final connected = await _thermalPrinterFlutterPlugin.connect(printer: printer);
       final stored = printer.copyWith(isConnected: connected);
       setState(() {
         _printers
@@ -202,9 +195,7 @@ class _MyAppState extends State<MyApp> {
           ..add(stored);
         _selectedPrinter = stored;
       });
-      _showBanner(connected
-          ? 'Impressora BLE conectada: ${stored.name}'
-          : 'Impressora BLE autorizada (não conectada): ${stored.name}');
+      _showBanner(connected ? 'Impressora BLE conectada: ${stored.name}' : 'Impressora BLE autorizada (não conectada): ${stored.name}');
     } catch (e) {
       // Erros reais de GATT/escrita chegam aqui com a mensagem do DOMException.
       setState(() => _connectionError = 'Erro ao autorizar impressora BLE: $e');
@@ -276,8 +267,7 @@ class _MyAppState extends State<MyApp> {
         _printers = [...bluetoothPrinters, ...usbPrinters];
         // Preserva a seleção atual se ainda existir (evita "pular" a impressora
         // escolhida quando o auto-reconnect recarrega a lista).
-        if (_selectedPrinter == null ||
-            !_printers.contains(_selectedPrinter)) {
+        if (_selectedPrinter == null || !_printers.contains(_selectedPrinter)) {
           _selectedPrinter = _printers.isNotEmpty ? _printers[0] : null;
         }
         _isLoading = false;
@@ -392,6 +382,7 @@ class _MyAppState extends State<MyApp> {
     bytes += generator.feed(1);
 
     if (withImage && mounted) {
+      bytes += generator.reset();
       final image = await _thermalPrinterFlutterPlugin.screenShotWidget(
         _rootContext,
         widget: OrderWidget(),
@@ -816,11 +807,9 @@ class _MyAppState extends State<MyApp> {
                     ),
                     const SizedBox(height: 10),
                     ElevatedButton.icon(
-                      onPressed:
-                          _isLoading ? null : _authorizeWebBluetoothPrinter,
+                      onPressed: _isLoading ? null : _authorizeWebBluetoothPrinter,
                       icon: const Icon(Icons.bluetooth),
-                      label:
-                          const Text('Authorize BLE printer (Web Bluetooth)'),
+                      label: const Text('Authorize BLE printer (Web Bluetooth)'),
                     ),
                   ],
                   const SizedBox(height: 20),
@@ -955,9 +944,8 @@ class _MyAppState extends State<MyApp> {
                             label: const Text('Print (texto)'),
                           ),
                           ElevatedButton.icon(
-                            onPressed: (_selectedPrinter?.isConnected == true || _selectedPrinter?.type == PrinterType.usb)
-                                ? _printBlueThermalSample
-                                : null,
+                            onPressed:
+                                (_selectedPrinter?.isConnected == true || _selectedPrinter?.type == PrinterType.usb) ? _printBlueThermalSample : null,
                             icon: const Icon(Icons.receipt_long),
                             label: const Text('Print (blue sample)'),
                           ),
