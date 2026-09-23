@@ -1,3 +1,18 @@
+## 2.1.0
+
+- `screenShotWidget` now renders the widget offscreen with its own build/layout/paint pipeline instead of inserting it into the app's `Overlay` and waiting for a post-frame callback. Capturing no longer depends on UI frames, so image receipts print while the app is minimized or in the background.
+- `screenShotWidget`'s `BuildContext` parameter is now optional (`BuildContext?`). When provided, the capture inherits the app's `Theme`, `MediaQuery`, `Directionality` and `Localizations`; network/asset images should be pre-cached (e.g. `precacheImage`) to appear in the capture.
+- Added a `timeout` parameter to `screenShotWidget` (default 10 s) that throws a `TimeoutException` if rendering stalls.
+- Screenshot performance: the widget is re-rendered only when something actually changes after the first frame, and render objects/layers are released right after capture instead of waiting for GC.
+
+## 2.0.0
+
+- **Web printing:** USB printers via WebUSB and BLE printers via Web Bluetooth (Chromium browsers). New APIs: `requestPrinter` (opens the browser's device chooser; returns `null` on native platforms), `isWebUsbSupported`, `isWebBluetoothSupported` and `onWebUsbConnectionChange` (auto-reconnect authorized USB printers when they are plugged in).
+- **Bluetooth on Windows:** paired SPP/RFCOMM thermal printers can now be listed, connected and printed to on Windows (previously blocked in the Dart layer). Connecting falls back to scanning RFCOMM channels when the printer doesn't publish an SPP record.
+- **iOS/macOS BLE writes reworked:** writes no longer block the main thread, chunks respect `maximumWriteValueLength`, and `.withoutResponse` writes are flow-controlled via `canSendWriteWithoutResponse`/`peripheralIsReady`. Each job ends with a `.withResponse` flush barrier, so `printBytes` completes only after the printer received the data. This fixes prints that stalled mid-receipt, were truncated or printed slowly.
+- Fixed iOS/macOS multi-chunk BLE payloads being corrupted after the first chunk (chunks are now zero-based `Data` copies).
+- Bluetooth print jobs now wait for the printer to drain its buffer (proportional to the payload size, max 5 s) before the next job starts, preventing truncated or frozen output when jobs are sent back to back.
+
 ## 0.1.0
 
 - **BREAKING:** Renamed `PrinterType.bluethoot` to `PrinterType.bluetooth`. Update call sites from `PrinterType.bluethoot` to `PrinterType.bluetooth`. Serialized data using the legacy `"bluethoot"` string is still parsed by `Printer.fromMap`.
