@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'package:thermal_printer_flutter/thermal_printer_flutter.dart';
 import 'thermal_printer_flutter_method_channel.dart';
@@ -42,6 +44,42 @@ abstract class ThermalPrinterFlutterPlatform extends PlatformInterface {
   Future<List<Printer>> getPrinters({required PrinterType printerType}) {
     throw UnimplementedError('getPrinters() has not been implemented.');
   }
+
+  /// Abre o seletor de dispositivos da plataforma para o usuário autorizar uma
+  /// impressora, retornando-a já pronta para uso.
+  ///
+  /// Hoje só faz sentido na **Web/USB** (WebUSB `requestDevice`): por restrição
+  /// de segurança do browser não há como varrer dispositivos silenciosamente, e
+  /// [getPrinters] na web retorna apenas os já autorizados. Em plataformas
+  /// nativas o default é `null` — use [getPrinters]. Retorna `null` se não for
+  /// suportado, se o usuário cancelar ou se nada for selecionado.
+  Future<Printer?> requestPrinter({required PrinterType printerType}) async {
+    return null;
+  }
+
+  /// Indica se o ambiente atual suporta impressão USB via **WebUSB**.
+  ///
+  /// Só retorna `true` na Web em navegadores Chromium (Chrome/Edge/Opera) com
+  /// `navigator.usb` disponível. Fora da Web (e em Safari/Firefox) é `false`.
+  /// Útil para a UI decidir entre orientar o usuário ou abrir o chooser via
+  /// [requestPrinter].
+  Future<bool> isWebUsbSupported() async => false;
+
+  /// Indica se o ambiente atual suporta impressão Bluetooth **BLE** via
+  /// **Web Bluetooth**.
+  ///
+  /// Só retorna `true` na Web em navegadores Chromium com `navigator.bluetooth`.
+  /// Fora da Web (e em Safari/Firefox) é `false`. Bluetooth clássico (RFCOMM)
+  /// não é suportado no browser.
+  Future<bool> isWebBluetoothSupported() async => false;
+
+  /// Emite um evento sempre que um dispositivo USB é conectado ou desconectado
+  /// (apenas Web, via eventos `connect`/`disconnect` do `navigator.usb`).
+  ///
+  /// Use para **auto-reconectar** impressoras já autorizadas: ao plugar o
+  /// dispositivo, reconsulte [getPrinters]/[requestPrinter] (que reaproveitam a
+  /// permissão existente sem abrir o chooser). Fora da Web é um stream vazio.
+  Stream<void> get onWebUsbConnectionChange => const Stream<void>.empty();
 
   Future<void> printBytes({required List<int> bytes, required Printer printer}) {
     throw UnimplementedError('printBytes() has not been implemented.');

@@ -25,7 +25,11 @@
             "name": "example",
             "cwd": "example",
             "request": "launch",
-            "type": "dart"
+            "type": "dart",
+            // Porta web FIXA: a permissão WebUSB/Web Bluetooth é por origem
+            // (inclui a porta). Sem porta fixa, cada execução vira uma origem
+            // nova e a autorização se perde.
+            "args": ["--web-port", "8080"]
         },
         {
             "name": "example (profile mode)",

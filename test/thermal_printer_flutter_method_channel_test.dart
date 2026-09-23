@@ -124,6 +124,32 @@ void main() {
     });
   });
 
+  group('web-only capabilities on native', () {
+    test('requestPrinter returns null without touching the channel', () async {
+      mockHandler((_) async => fail('o canal nativo não deve ser chamado'));
+
+      expect(
+          await platform.requestPrinter(printerType: PrinterType.usb), isNull);
+      expect(
+          await platform.requestPrinter(printerType: PrinterType.bluetooth),
+          isNull);
+      expect(calls, isEmpty);
+    });
+
+    test('isWebUsbSupported / isWebBluetoothSupported are false on native',
+        () async {
+      mockHandler((_) async => fail('o canal nativo não deve ser chamado'));
+
+      expect(await platform.isWebUsbSupported(), isFalse);
+      expect(await platform.isWebBluetoothSupported(), isFalse);
+      expect(calls, isEmpty);
+    });
+
+    test('onWebUsbConnectionChange é um stream vazio no nativo', () async {
+      expect(await platform.onWebUsbConnectionChange.isEmpty, isTrue);
+    });
+  });
+
   group('printBytes', () {
     test('usb printer sends a Uint8List payload with printerName', () async {
       mockHandler((call) async {
