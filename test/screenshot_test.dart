@@ -147,6 +147,82 @@ void main() {
     });
   });
 
+  group('ThermalScreenshot offscreen rendering', () {
+    Widget receipt() => const SizedBox(
+          width: 64,
+          height: 40,
+          child: ColoredBox(color: Colors.black),
+        );
+
+    testWidgets('captures without a BuildContext', (tester) async {
+      late img.Image image;
+      await tester.runAsync(() async {
+        image = await ThermalScreenshot.captureWidgetAsMonochromeImage(
+          null,
+          width: 64,
+          pixelRatio: 1.0,
+          dither: false,
+          useBetterText: false,
+          widget: receipt(),
+        );
+      });
+
+      expect(image.width, 64);
+      expect(image.height, 40);
+      // Conteúdo preto foi de fato pintado.
+      expect(image.getPixel(32, 20).luminanceNormalized, 0);
+    });
+
+    testWidgets('captures while the app is in background (no frames)',
+        (tester) async {
+      late BuildContext capturedContext;
+      await tester.pumpWidget(MaterialApp(
+        home: Builder(builder: (context) {
+          capturedContext = context;
+          return const SizedBox();
+        }),
+      ));
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      expect(tester.binding.framesEnabled, isFalse);
+
+      late img.Image image;
+      await tester.runAsync(() async {
+        // Nenhum pump: se a captura dependesse de frames, travaria aqui.
+        image = await ThermalScreenshot.captureWidgetAsMonochromeImage(
+          capturedContext,
+          width: 64,
+          pixelRatio: 1.0,
+          dither: false,
+          useBetterText: false,
+          widget: receipt(),
+        );
+      });
+
+      expect(image.height, 40);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    });
+
+    testWidgets('receipt height follows the widget (unbounded height)',
+        (tester) async {
+      late img.Image image;
+      await tester.runAsync(() async {
+        image = await ThermalScreenshot.captureWidgetAsMonochromeImage(
+          null,
+          width: 64,
+          pixelRatio: 1.0,
+          dither: false,
+          widget: Column(
+            children: List.generate(
+                10, (_) => const SizedBox(height: 100, width: 10)),
+          ),
+        );
+      });
+
+      expect(image.height, 1000);
+    });
+  });
+
   group('ThermalScreenshot.encodeToPng', () {
     test('encodes an image to non-empty PNG bytes', () {
       final image = img.Image(width: 4, height: 4);

@@ -8,9 +8,21 @@ import 'package:image/image.dart' as img;
 
 /// Captura widgets como imagens monocromáticas prontas para impressão térmica.
 class ThermalScreenshot {
+  /// Tempo máximo padrão para renderizar e capturar o widget.
+  static const Duration defaultTimeout = Duration(seconds: 10);
+
   /// Renderiza [widget] fora da tela e o converte numa imagem monocromática.
+  ///
+  /// A renderização usa um pipeline próprio (independente dos frames da UI),
+  /// então funciona com o app minimizado/em background — sem depender de
+  /// `Overlay` nem de `addPostFrameCallback`.
+  ///
+  /// [context] é opcional: quando informado, o widget herda `MediaQuery`,
+  /// temas (`Theme`, `DefaultTextStyle`, ...), `Directionality` e
+  /// `Localizations` dele. Imagens de rede/asset devem ser pré-carregadas
+  /// (ex.: `precacheImage`) para aparecerem na captura.
   static Future<img.Image> captureWidgetAsMonochromeImage(
-    BuildContext context, {
+    BuildContext? context, {
     required Widget widget,
     double pixelRatio = 3.0, // Reduzido para melhor performance
     int width = 576, // 80 mm @ 203 dpi (múltiplo de 8). Use 384 p/ 58 mm.
@@ -20,114 +32,170 @@ class ThermalScreenshot {
     bool useBetterText = true,
     double textScaleFactor = 1.3,
     bool dither = true,
+    Duration timeout = defaultTimeout,
   }) async {
-    final globalKey = GlobalKey();
-    final completer = Completer<img.Image>();
     final stopwatch = Stopwatch()..start();
 
-    final captureWidget = RepaintBoundary(
-      key: globalKey,
-      child: Directionality(
-        textDirection: TextDirection.ltr,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            minWidth: width.toDouble(),
-            maxWidth: width.toDouble(),
-          ),
-          child: applyTextScaling
-              ? MediaQuery(
-                  data: MediaQuery.of(context).copyWith(
-                    textScaler: TextScaler.linear(textScaleFactor),
-                  ),
-                  child: widget,
-                )
-              : widget,
-        ),
-      ),
+    // 1. Fase de Captura (pipeline offscreen)
+    final render = _renderOffscreen(
+      context,
+      widget: widget,
+      width: width.toDouble(),
+      pixelRatio: pixelRatio,
+      applyTextScaling: applyTextScaling,
+      textScaleFactor: textScaleFactor,
     );
-
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      try {
-        final boundary = globalKey.currentContext?.findRenderObject()
-            as RenderRepaintBoundary?;
-        // coverage:ignore-start
-        // Guarda defensiva: o boundary é sempre inserido na árvore antes do
-        // post-frame, então este ramo não é reproduzível em teste unitário.
-        if (boundary == null || !boundary.hasSize) {
-          throw Exception('Render boundary não está pronto');
-        }
-        // coverage:ignore-end
-
-        await Future.delayed(
-            const Duration(milliseconds: 10)); // Delay reduzido
-
-        // 1. Fase de Captura (Otimizada)
-        final ui.Image image = await boundary.toImage(pixelRatio: pixelRatio);
-        final ByteData? byteData =
-            await image.toByteData(); // Formato mais rápido
-        // coverage:ignore-start
-        // toByteData() só retorna null em falha de GPU, não reproduzível.
-        if (byteData == null) throw Exception('Falha ao obter bytes da imagem');
-        // coverage:ignore-end
-
-        // 2. Processamento Direto (Sem decodificação PNG intermediária)
-        final Uint8List rgbaBytes = byteData.buffer.asUint8List();
-        final int newWidth = (width % 8 != 0) ? ((width ~/ 8) * 8) : width;
-
-        // Conversão direta para imagem monocromática.
-        // `dither` usa reamostragem por média + Floyd–Steinberg (melhor para
-        // logos/fotos/tons de cinza). Caso contrário usa o caminho de
-        // limiar (melhor para texto puro).
-        var monoImage = dither
-            ? _convertWithDithering(
-                rgbaBytes, image.width, image.height, newWidth, threshold)
-            : useBetterText
-                ? _convertTextOptimizedMonochrome(
-                    rgbaBytes, image.width, image.height, newWidth, threshold)
-                : _convertRgbaToMonochromeFast(
-                    rgbaBytes, image.width, image.height, newWidth, threshold);
-
-        // Espelha horizontalmente quando solicitado (algumas impressoras
-        // térmicas/refletivas exigem a imagem invertida).
-        if (flipHorizontal) {
-          monoImage = img.flipHorizontal(monoImage);
-        }
-
-        image.dispose();
-        log('Screen shot time: ${stopwatch.elapsedMilliseconds}ms',
-            name: 'THERMAL_PRINTER_FLUTTER');
-        stopwatch.stop();
-        completer.complete(monoImage);
-        // coverage:ignore-start
-        // Caminho de erro de captura (falha de GPU/render), não reproduzível
-        // de forma determinística em teste unitário.
-      } catch (e) {
-        completer.completeError(e);
-      }
-      // coverage:ignore-end
+    final ui.Image image = await render.timeout(timeout, onTimeout: () {
+      // A renderização segue em andamento: libera a imagem quando terminar.
+      render.then((orphan) => orphan.dispose(), onError: (_) {});
+      throw TimeoutException(
+          'Tempo esgotado ao renderizar o widget para impressão', timeout);
     });
 
-    final overlayEntry = OverlayEntry(
-      builder: (context) => Positioned(
-        left: -10000,
-        child: Material(type: MaterialType.transparency, child: captureWidget),
+    try {
+      final ByteData? byteData = await image.toByteData(); // Formato mais rápido
+      // coverage:ignore-start
+      // toByteData() só retorna null em falha de GPU, não reproduzível.
+      if (byteData == null) throw Exception('Falha ao obter bytes da imagem');
+      // coverage:ignore-end
+
+      // 2. Processamento Direto (Sem decodificação PNG intermediária)
+      final Uint8List rgbaBytes = byteData.buffer.asUint8List();
+      final int newWidth = (width % 8 != 0) ? ((width ~/ 8) * 8) : width;
+
+      // Conversão direta para imagem monocromática.
+      // `dither` usa reamostragem por média + Floyd–Steinberg (melhor para
+      // logos/fotos/tons de cinza). Caso contrário usa o caminho de
+      // limiar (melhor para texto puro).
+      var monoImage = dither
+          ? _convertWithDithering(
+              rgbaBytes, image.width, image.height, newWidth, threshold)
+          : useBetterText
+              ? _convertTextOptimizedMonochrome(
+                  rgbaBytes, image.width, image.height, newWidth, threshold)
+              : _convertRgbaToMonochromeFast(
+                  rgbaBytes, image.width, image.height, newWidth, threshold);
+
+      // Espelha horizontalmente quando solicitado (algumas impressoras
+      // térmicas/refletivas exigem a imagem invertida).
+      if (flipHorizontal) {
+        monoImage = img.flipHorizontal(monoImage);
+      }
+
+      log('Screen shot time: ${stopwatch.elapsedMilliseconds}ms',
+          name: 'THERMAL_PRINTER_FLUTTER');
+      return monoImage;
+    } finally {
+      image.dispose();
+      stopwatch.stop();
+    }
+  }
+
+  /// Monta uma árvore de widgets isolada (BuildOwner/PipelineOwner próprios),
+  /// executa build → layout → paint manualmente e rasteriza o resultado.
+  static Future<ui.Image> _renderOffscreen(
+    BuildContext? context, {
+    required Widget widget,
+    required double width,
+    required double pixelRatio,
+    required bool applyTextScaling,
+    required double textScaleFactor,
+  }) async {
+    final ui.FlutterView view = (context != null
+            ? View.maybeOf(context)
+            : null) ??
+        WidgetsBinding.instance.platformDispatcher.implicitView ??
+        WidgetsBinding.instance.platformDispatcher.views.first;
+
+    var mediaQuery = (context != null ? MediaQuery.maybeOf(context) : null) ??
+        MediaQueryData.fromView(view);
+    if (applyTextScaling) {
+      mediaQuery =
+          mediaQuery.copyWith(textScaler: TextScaler.linear(textScaleFactor));
+    }
+
+    Widget child = Material(type: MaterialType.transparency, child: widget);
+    if (context != null) {
+      // Leva temas (Theme, DefaultTextStyle, IconTheme...) do app.
+      child = InheritedTheme.captureAll(context, child);
+      if (Localizations.maybeLocaleOf(context) != null) {
+        child = Localizations.override(context: context, child: child);
+      }
+    }
+    child = MediaQuery(
+      data: mediaQuery,
+      child: Directionality(
+        textDirection: (context != null
+                ? Directionality.maybeOf(context)
+                : null) ??
+            TextDirection.ltr,
+        child: child,
       ),
     );
 
-    Overlay.of(context, rootOverlay: true).insert(overlayEntry);
+    // Largura fixa, altura livre: o cupom define a própria altura.
+    final boundary = RenderRepaintBoundary();
+    final renderView = RenderView(
+      view: view,
+      configuration: ViewConfiguration(
+        logicalConstraints: BoxConstraints(minWidth: width, maxWidth: width),
+        devicePixelRatio: pixelRatio,
+      ),
+      child: boundary,
+    );
+
+    var dirty = false;
+    final pipelineOwner =
+        PipelineOwner(onNeedVisualUpdate: () => dirty = true)
+          ..rootNode = renderView;
+    renderView.prepareInitialFrame();
+    final focusManager = FocusManager();
+    final buildOwner = BuildOwner(
+        focusManager: focusManager, onBuildScheduled: () => dirty = true);
+
+    final root = RenderObjectToWidgetAdapter<RenderBox>(
+      container: boundary,
+      child: child,
+    ).attachToRenderTree(buildOwner);
+
+    void pump() {
+      buildOwner
+        ..buildScope(root)
+        ..finalizeTree();
+      pipelineOwner
+        ..flushLayout()
+        ..flushCompositingBits()
+        ..flushPaint();
+      // O próprio flush marca `dirty` (markNeedsPaint durante o layout);
+      // zera depois para só repintar quando algo mudar de fato.
+      dirty = false;
+    }
 
     try {
-      final result = await completer.future;
-      overlayEntry.remove();
-      return result;
-      // coverage:ignore-start
-      // Só alcançado se a captura falhar (ver bloco acima); o overlay é removido
-      // e o erro é repropagado ao chamador.
-    } catch (e) {
-      overlayEntry.remove();
-      rethrow;
+      pump();
+      // Dá chance a trabalho assíncrono curto (imagens em cache, fontes,
+      // localizações) se resolver e repinta enquanto houver mudanças.
+      for (var i = 0; i < 5; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        if (!dirty) break;
+        pump();
+      }
+      return await boundary.toImage(pixelRatio: pixelRatio);
+    } finally {
+      // Desmonta a árvore para liberar States/listeners de imagem.
+      RenderObjectToWidgetAdapter<RenderBox>(container: boundary)
+          .attachToRenderTree(buildOwner, root);
+      buildOwner
+        ..buildScope(root)
+        ..finalizeTree();
+      pipelineOwner
+        ..rootNode = null
+        ..dispose();
+      // Libera as layers (picture/engine layer) já, sem esperar o GC.
+      boundary.dispose();
+      renderView.dispose();
+      focusManager.dispose();
     }
-    // coverage:ignore-end
   }
 
   // Conversão direta de RGBA para monocromático com dithering

@@ -176,8 +176,11 @@ class ThermalPrinterFlutter implements ThermalPrinterFlutterPlatform {
   }
 
   /// Renderiza [widget] e retorna a imagem monocromática pronta para impressão.
+  ///
+  /// Funciona com o app minimizado/em background (renderização offscreen).
+  /// [context] é opcional e serve para herdar tema/MediaQuery/localizações.
   Future<img.Image> screenShotWidget(
-    BuildContext context, {
+    BuildContext? context, {
     required Widget widget,
     double pixelRatio = 3.0,
     int width = 576, // 80 mm @ 203 dpi (múltiplo de 8). Use 384 p/ 58 mm.
@@ -187,6 +190,7 @@ class ThermalPrinterFlutter implements ThermalPrinterFlutterPlatform {
     bool useBetterText = true,
     double textScaleFactor = 1.3,
     bool dither = true,
+    Duration timeout = ThermalScreenshot.defaultTimeout,
   }) async {
     return await ThermalScreenshot.captureWidgetAsMonochromeImage(context,
         widget: widget,
@@ -197,6 +201,7 @@ class ThermalPrinterFlutter implements ThermalPrinterFlutterPlatform {
         applyTextScaling: applyTextScaling,
         useBetterText: useBetterText,
         textScaleFactor: textScaleFactor,
-        dither: dither);
+        dither: dither,
+        timeout: timeout);
   }
 }
