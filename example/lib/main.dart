@@ -61,7 +61,7 @@ class _MyAppState extends State<MyApp> {
   bool _requireConfirmation = false;
 
   // Contexto abaixo do MaterialApp (definido no build via Builder), usado
-  // por screenShotWidget (Overlay) e showDialog (Navigator).
+  // por screenShotWidget (tema/MediaQuery) e showDialog (Navigator).
   late BuildContext _rootContext;
 
   @override
@@ -111,7 +111,9 @@ class _MyAppState extends State<MyApp> {
 
     try {
       List<Printer> bluetoothPrinters = [];
-      if (!Platform.isWindows) {
+      // Bluetooth agora é suportado também no Windows (RFCOMM nativo), então o
+      // bloco roda em todas as plataformas (era `if (!Platform.isWindows)`).
+      {
         // Check if Bluetooth is enabled
         final isEnabled = await _thermalPrinterFlutterPlugin.isBluetoothEnabled();
         if (!isEnabled) {
@@ -319,6 +321,20 @@ class _MyAppState extends State<MyApp> {
       print('Error printing: $e');
       _showBanner('Erro ao imprimir: $e', isError: true);
     }
+  }
+
+  /// Agenda a impressão (com imagem) para daqui a 5s — dá tempo de minimizar
+  /// a janela e conferir se o print sai com o app em segundo plano.
+  Future<void> _schedulePrint() async {
+    if (_selectedPrinter == null) {
+      _showBanner('Selecione uma impressora primeiro', isError: true);
+      return;
+    }
+    _showBanner('Imprimindo em 5s — minimize a janela agora');
+    print('SCHEDULE: impressão agendada para 5s');
+    await Future.delayed(const Duration(seconds: 5));
+    print('SCHEDULE: disparando impressão');
+    await _printTest(withImage: true);
   }
 
   /// Imprime o recibo de teste equivalente ao `testprint.dart` do
@@ -620,7 +636,7 @@ class _MyAppState extends State<MyApp> {
     return MaterialApp(
       scaffoldMessengerKey: _messengerKey,
       // `Builder` dá um contexto ABAIXO do MaterialApp — necessário para
-      // `screenShotWidget` (Overlay.of) e `showDialog` (Navigator.of).
+      // `screenShotWidget` (tema/MediaQuery) e `showDialog` (Navigator.of).
       home: Builder(builder: (context) {
         _rootContext = context;
         return Scaffold(
@@ -643,7 +659,9 @@ class _MyAppState extends State<MyApp> {
                       ),
                     ),
                   const SizedBox(height: 20),
-                  if (!Platform.isWindows) ...[
+                  // Bluetooth controls now show on every platform (Windows
+                  // gained native RFCOMM support).
+                  ...[
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       children: [
@@ -825,6 +843,13 @@ class _MyAppState extends State<MyApp> {
                                 : null,
                             icon: const Icon(Icons.receipt_long),
                             label: const Text('Print (blue sample)'),
+                          ),
+                          ElevatedButton.icon(
+                            onPressed: (_selectedPrinter?.isConnected == true || _selectedPrinter?.type == PrinterType.usb)
+                                ? _schedulePrint
+                                : null,
+                            icon: const Icon(Icons.timer),
+                            label: const Text('Print em 5s (minimize)'),
                           ),
                           ElevatedButton(
                             onPressed: _selectedPrinter?.isConnected == true
